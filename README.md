@@ -51,5 +51,3 @@ Each result includes:
 - Clean **web report interface**
 - **Professional OSINT-style report layout**
 - Built-in **ethics reminder**
-- Easily extendable platform list
-- Optional JSON export for analysis or tuning
