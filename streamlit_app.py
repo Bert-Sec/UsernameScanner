@@ -7,7 +7,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("BertSec - OSINT Username Scanner")
+st.title("OSINT Username Scanner")
 st.caption(
     "Use this tool only for authorized OSINT, defensive research, your own accounts, lawful investigations, or CTFs."
 )
