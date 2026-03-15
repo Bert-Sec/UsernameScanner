@@ -1,4 +1,4 @@
-# BertSec – OSINT Username Scanner
+# OSINT Username Scanner
 
 A modern OSINT username enumeration tool and web application that scans dozens of platforms to determine whether a username exists.  
 The scanner uses heuristic scoring to analyze profile pages and produces a clean, professional report with confidence ratings.
