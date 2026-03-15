@@ -2,7 +2,7 @@ import streamlit as st
 from scanner import scan_username, results_summary, humanize_reason
 
 st.set_page_config(
-    page_title="BertSec - OSINT Username Scanner",
+    page_title="OSINT Username Scanner",
     page_icon="🔎",
     layout="wide",
 )
