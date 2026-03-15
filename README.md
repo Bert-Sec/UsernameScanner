@@ -7,6 +7,16 @@ Built for investigators, security researchers, OSINT analysts, and CTF competito
 
 ---
 
+## Live Web App
+
+You can access the hosted scanner here:
+
+**https://usernamescanner.streamlit.app/**
+
+Simply enter a username and the scanner will check dozens of platforms and generate a structured OSINT report.
+
+---
+
 ## Overview
 
 The **BertSec OSINT Username Scanner** automates the process of checking a username across many online platforms.  
@@ -43,55 +53,3 @@ Each result includes:
 - Built-in **ethics reminder**
 - Easily extendable platform list
 - Optional JSON export for analysis or tuning
-
----
-
-## How the Detection Engine Works
-
-The scanner analyzes multiple indicators to determine whether a username exists on a platform.
-
-### Positive Signals (+ Score)
-
-Examples include:
-
-- Username present in page title
-- Username present in profile URL
-- Username detected in page content
-- Profile metadata or structured data
-- Typical profile indicators (followers, posts, repositories, etc.)
-
-### Negative Signals (- Score)
-
-Examples include:
-
-- “Page not found” language
-- Missing profile indicators
-- Login walls
-- Access restrictions
-- Anti-bot or verification pages
-
-### Result Classification
-
-Based on the signal balance:
-
-| Result | Meaning |
-|------|------|
-| **Found** | Strong indicators that the account exists |
-| **Not Found** | Strong indicators that the account does not exist |
-| **Unconfirmed** | Mixed signals or restricted access |
-
-Confidence levels indicate how strong the evidence is.
-
----
-
-## Example Report Output
-
-The web interface produces a clean report including:
-
-- Username summary
-- Statistics (Found / Not Found / Unconfirmed)
-- Grouped results tables
-- Direct profile links
-- Friendly explanations
-
-Example sections:
