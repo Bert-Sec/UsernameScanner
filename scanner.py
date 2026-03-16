@@ -1,23 +1,28 @@
 from __future__ import annotations
+import re
+# Switch to curl_cffi to bypass TLS fingerprinting blocks on Reddit/Instagram/Twitch
 from curl_cffi import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
-from typing import Dict, List, Optional
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional
+
+# --- CONFIGURATION ---
 
 PLATFORMS: Dict[str, str] = {
-    "Twitch": "https://www.twitch.tv/{}",
-    "YouTube": "https://www.youtube.com/@{}",
-    "Reddit": "https://www.reddit.com/user/{}",
     "GitHub": "https://github.com/{}",
+    "Reddit": "https://www.reddit.com/user/{}",
+    "YouTube": "https://www.youtube.com/@{}",
+    "Twitch": "https://www.twitch.tv/{}",
     "Instagram": "https://www.instagram.com/{}/",
     "TikTok": "https://www.tiktok.com/@{}",
+    "ArtStation": "https://www.artstation.com/{}",
+    # ... keep your other 180+ platforms here
 }
 
-# Negative markers must be very specific to avoid false negatives
 NEGATIVE_MARKERS = [
-    "nobody on reddit goes by that name", 
-    "this account has been suspended",
-    "404 not found"
+    "page not found", "404", "user not found", "doesn't exist",
+    "nobody on reddit goes by that name", "profile not found",
+    "this account is private", "this account has been suspended"
 ]
 
 @dataclass
@@ -33,64 +38,74 @@ class ScanResult:
     negative_score: int = 0
     friendly_reason: str = ""
 
+# --- STREAMLIT HELPERS ---
+
+def results_summary(results: List[ScanResult]) -> Dict[str, int]:
+    return {
+        "found": sum(1 for r in results if r.state == "found"),
+        "not_found": sum(1 for r in results if r.state == "not_found"),
+        "unconfirmed": sum(1 for r in results if r.state == "unconfirmed"),
+        "total": len(results)
+    }
+
+def humanize_reason(note: str, state: str, pos: int, neg: int) -> str:
+    if state == "found": return f"Presence confirmed via metadata (Score: {pos})"
+    if state == "not_found": return "Platform confirmed account does not exist."
+    return note if note else "Platform restricted access or insufficient data."
+
+# --- ENGINE ---
+
 def score_response(platform: str, username: str, html: str, status_code: int, final_url: str) -> tuple[str, str, str, int, int]:
     body = html.lower()
     uname_l = username.lower()
+    pos, neg = 0, 0
     
-    # 1. Platform-Specific "Fingerprints" for Positive Matches
-    pos = 0
-    
-    # Twitch: Look for unique 'channelID' or 'streamer' keywords in the JS
-    if platform == "Twitch":
-        if any(x in body for x in ["channelid", "isavailable", 'login":"' + uname_l]):
-            pos += 90
-            
-    # YouTube: Look for the specific @handle in the metadata
-    if platform == "YouTube":
-        if f"youtube.com/@{uname_l}" in body or "channelid" in body:
-            pos += 90
+    # 1. Platform-Specific Fingerprinting (Bypasses generic blocks)
+    if platform == "GitHub" and (f'"{username}"' in body or "contributions" in body):
+        pos += 90
+    if platform == "Twitch" and ("channelid" in body or 'login":"' + uname_l in body):
+        pos += 90
+    if platform == "YouTube" and (f"@{uname_l}" in body or "channelid" in body):
+        pos += 90
+    if platform == "Reddit" and ("karma" in body or "cake day" in body):
+        pos += 90
+    if platform == "TikTok" and ("webapp.user-detail" in body or f'uniqueid":"{uname_l}"' in body):
+        pos += 90
 
-    # Reddit: Look for 'karma' or 'cake day'
-    if platform == "Reddit":
-        if any(x in body for x in ["karma", "cake day", "comment-karma"]):
-            pos += 90
-
-    # General Fallbacks
-    if uname_l in body: pos += 20
-    if uname_l in final_url: pos += 20
-
-    # 2. Re-evaluating 403s
-    # If we get a 403 but the username is in the HTML, it's a "Found" account behind a bot-block
-    if status_code == 403 and pos > 40:
-        return "found", "Profile detected despite bot-block (403)", "medium", pos, 0
-
-    # 3. Hard Negatives
+    # 2. Hard Status Checks
     if status_code == 404:
-        # Check if it's a 'Fake' 404 (Twitch does this sometimes)
-        if pos > 70: return "found", "Confirmed via Metadata", "high", pos, 0
         return "not_found", "HTTP 404", "high", 0, 100
+    
+    # If we found metadata signals but got a 403/429, it's still a "Found"
+    if status_code in (401, 403, 429) and pos > 50:
+        return "found", f"Detected via metadata despite HTTP {status_code}", "medium", pos, 0
 
+    # 3. Negative Markers (Soft 404s)
     for marker in NEGATIVE_MARKERS:
         if marker in body:
-            return "not_found", f"Confirmed: {marker}", "high", 0, 100
+            return "not_found", f"Confirmed missing: {marker}", "high", 0, 100
+
+    # 4. General Scoring
+    if uname_l in body: pos += 30
+    if uname_l in final_url: pos += 20
 
     if pos >= 60:
-        return "found", "Matches found", "high", pos, 0
+        return "found", "Positive match", "high", pos, 0
+    if status_code in (403, 429):
+        return "unconfirmed", f"Access Restricted ({status_code})", "low", 0, 50
         
-    return "unconfirmed", "Ambiguous signals", "low", pos, 0
+    return "unconfirmed", "Insufficient signals", "low", pos, 0
 
-def check_platform(platform: str, username: str, timeout: float = 12.0) -> ScanResult:
+def check_platform(platform: str, username: str, timeout: float = 10.0) -> ScanResult:
     url = PLATFORMS[platform].format(username)
     try:
-        # We rotate the impersonation target to see if it helps
-        target = "chrome110" if platform != "Twitch" else "safari_ios"
-        
+        # Using impersonate="chrome110" makes the script look like a real browser
         response = requests.get(
             url, 
-            impersonate=target, 
+            impersonate="chrome110", 
             timeout=timeout, 
             allow_redirects=True,
-            headers={"Referer": "https://www.google.com/"} # Adding a referer helps
+            headers={"Referer": "https://www.google.com/"}
         )
         
         state, note, conf, pos, neg = score_response(
@@ -103,9 +118,9 @@ def check_platform(platform: str, username: str, timeout: float = 12.0) -> ScanR
             note=note, positive_score=pos, negative_score=neg
         )
     except Exception as e:
-        return ScanResult(platform, url, url, "unconfirmed", None, "low", f"Error: {str(e)}")
+        return ScanResult(platform, url, url, "unconfirmed", None, "low", str(e))
 
-def scan_username(username: str, timeout: float = 12.0, workers: int = 20) -> List[ScanResult]:
+def scan_username(username: str, timeout: float = 10.0, workers: int = 25) -> List[ScanResult]:
     results = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(check_platform, p, username, timeout): p for p in PLATFORMS}
@@ -115,16 +130,3 @@ def scan_username(username: str, timeout: float = 12.0, workers: int = 20) -> Li
     order = {"found": 0, "unconfirmed": 1, "not_found": 2}
     results.sort(key=lambda x: (order.get(x.state, 3), x.platform))
     return results
-
-def results_summary(results: List[ScanResult]) -> Dict[str, int]:
-    return {
-        "found": sum(1 for r in results if r.state == "found"),
-        "not_found": sum(1 for r in results if r.state == "not_found"),
-        "unconfirmed": sum(1 for r in results if r.state == "unconfirmed"),
-        "total": len(results)
-    }
-
-def humanize_reason(note: str, state: str, pos: int, neg: int) -> str:
-    if state == "found": return f"Presence confirmed (Score: {pos})"
-    if state == "not_found": return "Account definitely not found."
-    return note if note else "Checking platform constraints..."
