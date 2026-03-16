@@ -309,6 +309,21 @@ def check_platform(platform: str, username: str) -> ScanResult:
     except Exception as e:
         return ScanResult(platform, url, url, "unconfirmed", None, "low", f"Error: {str(e)}")
 
+def results_summary(results: List[ScanResult]) -> Dict[str, int]:
+    """Summarizes counts for the Streamlit metrics."""
+    summary = {"found": 0, "not_found": 0, "unconfirmed": 0, "total": len(results)}
+    for r in results:
+        summary[r.state] += 1
+    return summary
+
+def humanize_reason(note: str, state: str, pos: int, neg: int) -> str:
+    """Converts technical notes into readable text for the UI."""
+    if state == "found":
+        return f"Verified via metadata ({pos}+ signals)"
+    if state == "not_found":
+        return note if note else "No account signals detected."
+    return "Site restricted or required a captcha."
+    
 def scan_username(username: str, workers: int = 25) -> List[ScanResult]:
     results = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
