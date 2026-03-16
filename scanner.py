@@ -64,6 +64,10 @@ def title_is_explicit_not_found(title: str, username: str) -> bool:
         "profile not found",
         "account not found",
         "page not found",
+        "no such user",
+        "sorry, this user was not found",
+        "we looked everywhere but couldn't find this page",
+        "we looked everywhere but couldnt find this page",
         "this account doesn't exist",
         "this account does not exist",
     ]
@@ -87,6 +91,13 @@ def body_is_explicit_not_found(body: str) -> bool:
         "nobody on reddit goes by that name",
         "this page does not exist",
         "the page you requested could not be found",
+        "no such user",
+        "sorry, this user was not found",
+        "we looked everywhere but couldn't find this page",
+        "we looked everywhere but couldnt find this page",
+        "error code 404",
+        "couldn't find this page",
+        "could not find this page",
     ]
     return any(p in body for p in hard_patterns)
 
@@ -125,14 +136,6 @@ def safe_domain_path(url: str) -> str:
         return f"{parsed.netloc}{path}".lower()
     except Exception:
         return url.lower()
-
-
-def visible_path(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-        return (parsed.path or "/").lower()
-    except Exception:
-        return "/"
 
 
 def get_session() -> requests.Session:
@@ -190,6 +193,7 @@ GLOBAL_NEGATIVE_TITLE = [
     "access denied",
     "sign in",
     "login",
+    "no such user",
 ]
 
 GLOBAL_NEGATIVE_BODY = [
@@ -222,6 +226,11 @@ GLOBAL_NEGATIVE_BODY = [
     "we couldn't find that user",
     "user does not exist",
     "requested user was not found",
+    "no such user",
+    "sorry, this user was not found",
+    "we looked everywhere but couldn't find this page",
+    "we looked everywhere but couldnt find this page",
+    "error code 404",
 ]
 
 GLOBAL_AUTH_STRINGS = [
@@ -364,6 +373,106 @@ def build_platforms() -> Dict[str, PlatformRule]:
         rules[rule.name] = rule
 
     add(make_rule(
+        "Crates.io",
+        "https://crates.io/users/{}",
+        not_found_strings=[
+            "user not found",
+            "not found",
+        ],
+        title_not_found_strings=[
+            "user not found",
+            "not found",
+        ],
+        positive_strings=[
+            "crates",
+            "following",
+        ],
+        title_positive_strings=[
+            "crates.io",
+        ],
+        negative_regex=[
+            r"\b{u}\b\s*:\s*user not found",
+            r"\buser not found\b",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    add(make_rule(
+        "eBay",
+        "https://www.ebay.com/usr/{}",
+        not_found_strings=[
+            "sorry, this user was not found",
+            "user was not found",
+            "this page could not be found",
+            "no exact matches found",
+        ],
+        title_not_found_strings=[
+            "sorry, this user was not found",
+            "user was not found",
+        ],
+        positive_strings=[
+            "feedback",
+            "items for sale",
+            "member since",
+            "seller's other items",
+        ],
+        negative_regex=[
+            r"sorry,\s*this user was not found",
+            r"user was not found",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    add(make_rule(
+        "Hacker News",
+        "https://news.ycombinator.com/user?id={}",
+        not_found_strings=[
+            "no such user",
+            "user not found",
+        ],
+        title_not_found_strings=[
+            "no such user",
+        ],
+        positive_strings=[
+            "created",
+            "karma",
+            "about",
+            "submissions",
+            "comments",
+        ],
+        negative_regex=[
+            r"\bno such user\b",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    add(make_rule(
+        "PyPI",
+        "https://pypi.org/user/{}",
+        not_found_strings=[
+            "we looked everywhere but couldn't find this page",
+            "we looked everywhere but couldnt find this page",
+            "error code 404",
+            "404 not found",
+            "not found",
+        ],
+        title_not_found_strings=[
+            "404 not found",
+            "not found",
+        ],
+        positive_strings=[
+            "projects",
+            "releases",
+        ],
+        negative_regex=[
+            r"we looked everywhere but couldn'?t find this page",
+            r"\berror code 404\b",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    # Keep some other examples from your larger set
+    add(make_rule(
         "GitHub", "https://github.com/{}",
         not_found_strings=["not found"],
         title_positive_strings=["github", "@"],
@@ -377,391 +486,9 @@ def build_platforms() -> Dict[str, PlatformRule]:
         must_keep_username_in_final_url=True,
     ))
     add(make_rule(
-        "Bitbucket", "https://bitbucket.org/{}",
-        not_found_strings=["this page doesn't exist", "404"],
-        positive_strings=["repositories", "snippets", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Codeberg", "https://codeberg.org/{}",
-        not_found_strings=["not found"],
-        positive_strings=["repositories", "activity", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "SourceHut", "https://git.sr.ht/~{}",
-        not_found_strings=["not found"],
-        positive_strings=["repositories", "activity"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Hugging Face", "https://huggingface.co/{}",
-        not_found_strings=["user not found", "404"],
-        title_not_found_strings=["user not found"],
-        positive_strings=["models", "datasets", "spaces", "followers"],
-        title_positive_strings=["hugging face"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "PyPI", "https://pypi.org/user/{}",
-        not_found_strings=["404 not found", "not found"],
-        positive_strings=["projects", "releases"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "npm", "https://www.npmjs.com/~{}",
-        not_found_strings=["not found"],
-        positive_strings=["packages", "collaborators"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Docker Hub", "https://hub.docker.com/u/{}",
-        not_found_strings=["404 page not found", "page not found"],
-        positive_strings=["repositories", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Crates.io",
-        "https://crates.io/users/{}",
-        not_found_strings=["user not found", "not found"],
-        title_not_found_strings=["user not found", "not found"],
-        positive_strings=["crates", "following"],
-        title_positive_strings=["crates.io"],
-        negative_regex=[r"\b{u}\b\s*:\s*user not found", r"\buser not found\b"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "RubyGems", "https://rubygems.org/profiles/{}",
-        not_found_strings=["this page could not be found", "not found"],
-        positive_strings=["gems", "downloads", "versions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Packagist", "https://packagist.org/users/{}",
-        not_found_strings=["404 not found", "not found"],
-        positive_strings=["packages", "downloads"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "CPAN", "https://metacpan.org/author/{}",
-        not_found_strings=["not found"],
-        positive_strings=["release", "distribution", "favorites"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Dev.to", "https://dev.to/{}",
-        not_found_strings=["404 not found", "page not found"],
-        positive_strings=["followers", "following", "posts", "articles"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Hashnode", "https://{}.hashnode.dev",
-        not_found_strings=["page not found", "this site can't be reached", "dns_probe_finished_nxdomain"],
-        positive_strings=["posts", "followers", "following"],
-        title_positive_strings=["hashnode"],
-    ))
-    add(make_rule(
-        "Medium", "https://medium.com/@{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["followers", "following", "member since"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Substack", "https://{}.substack.com",
-        not_found_strings=["this site can’t be reached", "this site can't be reached", "dns_probe_finished_nxdomain"],
-        positive_strings=["subscribe", "archive", "posts"],
-        title_positive_strings=["substack"],
-    ))
-    add(make_rule(
-        "WordPress", "https://{}.wordpress.com",
-        not_found_strings=["do you want to register", "site unavailable", "doesn’t exist", "doesn't exist"],
-        positive_strings=["posts", "comments", "wordpress.com"],
-    ))
-    add(make_rule(
-        "About.me", "https://about.me/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["about.me", "follow", "message"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Linktree", "https://linktr.ee/{}",
-        not_found_strings=["not found", "this profile doesn't exist", "this profile does not exist"],
-        positive_strings=["followers", "links"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Ko-fi", "https://ko-fi.com/{}",
-        not_found_strings=["404", "not found"],
-        positive_strings=["support", "posts", "shop", "gallery"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Patreon", "https://www.patreon.com/{}",
-        not_found_strings=["looks like this page is missing", "not found"],
-        positive_strings=["members", "posts", "join"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Behance", "https://www.behance.net/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["followers", "following", "projects", "appreciations"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Dribbble", "https://dribbble.com/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["shots", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "DeviantArt", "https://www.deviantart.com/{}",
-        not_found_strings=["page not found", "this page does not exist"],
-        positive_strings=["watchers", "deviations", "favourites"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "ArtStation", "https://www.artstation.com/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["followers", "following", "portfolio"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Pixiv", "https://www.pixiv.net/en/users/{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["illustrations", "manga", "bookmarks"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "500px", "https://500px.com/p/{}",
-        not_found_strings=["404", "not found"],
-        positive_strings=["followers", "following", "photos"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Flickr", "https://www.flickr.com/people/{}",
-        not_found_strings=["not found", "page not found"],
-        positive_strings=["photostream", "albums", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Unsplash", "https://unsplash.com/@{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["photos", "collections", "likes"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Pexels", "https://www.pexels.com/@{}/",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["followers", "following", "photos", "videos"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Instagram", "https://www.instagram.com/{}/",
-        not_found_strings=["sorry, this page isn't available", "page isn't available", "page isnt available"],
-        auth_strings=["login", "sign up", "log in"],
-        positive_strings=["posts", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Threads", "https://www.threads.net/@{}",
-        not_found_strings=["sorry, this page isn't available", "page not found"],
-        auth_strings=["log in", "sign up"],
-        positive_strings=["threads", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "X", "https://x.com/{}",
-        not_found_strings=["this account doesn’t exist", "this account doesn't exist"],
-        auth_strings=["join x today", "log in", "sign up"],
-        positive_strings=["followers", "following", "posts"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Facebook", "https://www.facebook.com/{}",
-        not_found_strings=["this content isn't available right now", "content isn't available right now"],
-        auth_strings=["log into facebook", "log in to facebook"],
-        positive_strings=["friends", "photos", "posts", "about"],
-    ))
-    add(make_rule(
-        "TikTok", "https://www.tiktok.com/@{}",
-        not_found_strings=["couldn't find this account", "could not find this account", "page not available"],
-        auth_strings=["log in", "sign up", "verify to continue"],
-        positive_strings=["followers", "following", "likes"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Snapchat", "https://www.snapchat.com/add/{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["snapchat"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Pinterest", "https://www.pinterest.com/{}/",
-        not_found_strings=["sorry, we couldn't find that page", "we couldn't find that page"],
-        positive_strings=["followers", "following", "boards", "pins"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
         "Reddit", "https://www.reddit.com/user/{}",
         not_found_strings=["nobody on reddit goes by that name", "page not found"],
         positive_strings=["karma", "cake day", "posts", "comments"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Tumblr", "https://{}.tumblr.com",
-        not_found_strings=["there's nothing here", "there's nothing here.", "not found"],
-        positive_strings=["tumblr", "archive", "following"],
-    ))
-    add(make_rule(
-        "Mastodon Social", "https://mastodon.social/@{}",
-        not_found_strings=["not found", "404"],
-        positive_strings=["followers", "following", "statuses"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Mastodon Online", "https://mastodon.online/@{}",
-        not_found_strings=["not found", "404"],
-        positive_strings=["followers", "following", "statuses"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Bluesky", "https://bsky.app/profile/{}",
-        not_found_strings=["profile not found", "not found"],
-        positive_strings=["followers", "following", "posts"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Telegram", "https://t.me/{}",
-        not_found_strings=["if you have telegram, you can contact", "page not found"],
-        positive_strings=["send message", "telegram"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Keybase", "https://keybase.io/{}",
-        not_found_strings=["we couldn't find", "not found"],
-        positive_strings=["proofs", "following", "followers", "keybase"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Disqus", "https://disqus.com/by/{}/",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["comments", "disqus"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Gravatar", "https://gravatar.com/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["profile", "contact", "about"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Hacker News", "https://news.ycombinator.com/user?id={}",
-        not_found_strings=["no such user", "user not found"],
-        positive_strings=["created", "karma", "about", "submissions", "comments"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Lobsters", "https://lobste.rs/u/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["karma", "stories", "comments"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "LeetCode", "https://leetcode.com/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["ranking", "reputation", "solutions", "submissions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "HackerRank", "https://www.hackerrank.com/{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["badges", "certificates", "submissions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Codewars", "https://www.codewars.com/users/{}",
-        not_found_strings=["404", "not found"],
-        positive_strings=["honor", "completed kata", "allies"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "CodeChef", "https://www.codechef.com/users/{}",
-        not_found_strings=["user does not exist", "page not found"],
-        positive_strings=["rating", "stars", "global rank"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "AtCoder", "https://atcoder.jp/users/{}",
-        not_found_strings=["user not found", "404"],
-        positive_strings=["rating", "highest rating", "rank"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Topcoder", "https://www.topcoder.com/members/{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["member", "challenges", "stats"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Exercism", "https://exercism.org/profiles/{}",
-        not_found_strings=["404", "not found"],
-        positive_strings=["tracks", "mentoring", "solutions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "freeCodeCamp", "https://www.freecodecamp.org/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["certifications", "portfolio", "projects"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "TryHackMe", "https://tryhackme.com/p/{}",
-        not_found_strings=["404", "not found"],
-        auth_strings=["sign in", "login"],
-        positive_strings=["badges", "rooms", "rank"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Root Me", "https://www.root-me.org/{}",
-        not_found_strings=["not found", "404"],
-        positive_strings=["score", "challenges", "profile"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Hackaday", "https://hackaday.io/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["projects", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Instructables", "https://www.instructables.com/member/{}/",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["instructables", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Steam", "https://steamcommunity.com/id/{}",
-        not_found_strings=["the specified profile could not be found", "profile could not be found"],
-        positive_strings=["friends", "games", "screenshots", "inventory"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Chess.com", "https://www.chess.com/member/{}",
-        not_found_strings=["member not found", "page not found"],
-        positive_strings=["ratings", "joined", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Lichess", "https://lichess.org/@/{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["rating", "games", "puzzles", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Twitch", "https://www.twitch.tv/{}",
-        not_found_strings=["sorry. unless you’ve got a time machine", "page not found"],
-        auth_strings=["log in", "sign up"],
-        positive_strings=["followers", "schedule", "videos", "clips"],
         must_keep_username_in_final_url=True,
     ))
     add(make_rule(
@@ -770,371 +497,11 @@ def build_platforms() -> Dict[str, PlatformRule]:
         positive_strings=["videos", "subscribers", "joined"],
         must_keep_username_in_final_url=True,
     ))
-    add(make_rule(
-        "Vimeo", "https://vimeo.com/{}",
-        not_found_strings=["sorry, we couldn’t find that page", "sorry, we couldn't find that page"],
-        positive_strings=["followers", "following", "videos"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "SoundCloud", "https://soundcloud.com/{}",
-        not_found_strings=["not found", "404"],
-        positive_strings=["tracks", "followers", "following", "likes"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Bandcamp", "https://{}.bandcamp.com",
-        not_found_strings=["sorry, that something isn't here", "sorry, that something isn’t here"],
-        positive_strings=["track", "album", "merch", "bandcamp"],
-    ))
-    add(make_rule(
-        "Last.fm", "https://www.last.fm/user/{}",
-        not_found_strings=["user not found", "not found"],
-        positive_strings=["scrobbles", "loved tracks", "playlists"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Mixcloud", "https://www.mixcloud.com/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["followers", "following", "shows"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Genius", "https://genius.com/{}",
-        not_found_strings=["page not found", "404"],
-        positive_strings=["lyrics", "contributors", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Letterboxd", "https://letterboxd.com/{}/",
-        not_found_strings=["sorry, we can’t find the page", "sorry, we can't find the page"],
-        positive_strings=["films", "followers", "following", "reviews"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Wattpad", "https://www.wattpad.com/user/{}",
-        not_found_strings=["page not found", "user not found"],
-        positive_strings=["stories", "reading lists", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Archive of Our Own", "https://archiveofourown.org/users/{}",
-        not_found_strings=["error 404", "not found"],
-        positive_strings=["works", "bookmarks", "subscriptions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "AllTrails", "https://www.alltrails.com/members/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["completed trails", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Untappd", "https://untappd.com/user/{}",
-        not_found_strings=["not found", "page not found"],
-        positive_strings=["beers", "check-ins", "friends"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Vivino", "https://www.vivino.com/users/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["followers", "following", "wines"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Venmo", "https://venmo.com/{}",
-        not_found_strings=["page not found", "profile unavailable"],
-        positive_strings=["venmo"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "PayPal.me", "https://paypal.me/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["paypal"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Etsy", "https://www.etsy.com/people/{}",
-        not_found_strings=["uh oh!", "page not found"],
-        positive_strings=["favorites", "followers", "etsy"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Poshmark", "https://poshmark.com/closet/{}",
-        not_found_strings=["this page could not be found", "not found"],
-        positive_strings=["closet", "listings", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Depop", "https://www.depop.com/{}",
-        not_found_strings=["not found", "404"],
-        positive_strings=["reviews", "followers", "following", "listings"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "eBay", "https://www.ebay.com/usr/{}",
-        not_found_strings=["no exact matches found", "this page could not be found"],
-        positive_strings=["feedback", "items for sale", "member since"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "MyAnimeList", "https://myanimelist.net/profile/{}",
-        not_found_strings=["404 not found", "page not found"],
-        positive_strings=["anime list", "manga list", "friends", "favorites"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "AniList", "https://anilist.co/user/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["anime", "manga", "following", "followers"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Trakt", "https://trakt.tv/users/{}",
-        not_found_strings=["404", "not found"],
-        positive_strings=["history", "collection", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Pastebin", "https://pastebin.com/u/{}",
-        not_found_strings=["not found", "404"],
-        positive_strings=["public pastes", "views", "pastebin"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Devpost", "https://devpost.com/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["projects", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "ResearchGate", "https://www.researchgate.net/profile/{}",
-        not_found_strings=["page not found", "not found"],
-        positive_strings=["publications", "citations", "reads"],
-        reliability="medium",
-    ))
-    add(make_rule(
-        "ORCID", "https://orcid.org/{}",
-        not_found_strings=["record not found", "not found"],
-        positive_strings=["works", "employment", "education"],
-        must_keep_username_in_final_url=True,
-        reliability="medium",
-    ))
-    add(make_rule(
-        "Muck Rack", "https://muckrack.com/{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["articles", "portfolio", "mentions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Thingiverse", "https://www.thingiverse.com/{}/designs",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["designs", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Printables", "https://www.printables.com/@{}",
-        not_found_strings=["404", "page not found"],
-        positive_strings=["models", "followers", "following"],
-        must_keep_username_in_final_url=True,
-    ))
-
-    bulk_rules = [
-        ("Gitea", "https://gitea.com/{}"),
-        ("Forgejo", "https://codeberg.org/{}"),
-        ("Launchpad", "https://launchpad.net/~{}"),
-        ("Replit", "https://replit.com/@{}"),
-        ("CodePen", "https://codepen.io/{}"),
-        ("JSFiddle", "https://jsfiddle.net/user/{}/"),
-        ("StackBlitz", "https://stackblitz.com/@{}"),
-        ("Glitch", "https://glitch.com/@{}"),
-        ("Observable", "https://observablehq.com/@{}"),
-        ("Kaggle", "https://www.kaggle.com/{}"),
-        ("Blogger", "https://{}.blogspot.com"),
-        ("Ghost", "https://{}.ghost.io"),
-        ("Wix", "https://{}.wixsite.com"),
-        ("Carrd", "https://{}.carrd.co"),
-        ("Buy Me a Coffee", "https://www.buymeacoffee.com/{}"),
-        ("Gumroad", "https://{}.gumroad.com"),
-        ("Product Hunt", "https://www.producthunt.com/@{}"),
-        ("Indie Hackers", "https://www.indiehackers.com/{}"),
-        ("Wellfound", "https://wellfound.com/u/{}"),
-        ("Freelancer", "https://www.freelancer.com/u/{}"),
-        ("Fiverr", "https://www.fiverr.com/{}"),
-        ("99designs", "https://99designs.com/profiles/{}"),
-        ("Envato", "https://elements.envato.com/user/{}"),
-        ("Codecanyon", "https://codecanyon.net/user/{}"),
-        ("ThemeForest", "https://themeforest.net/user/{}"),
-        ("VSCO", "https://vsco.co/{}/gallery"),
-        ("Canva", "https://www.canva.com/{}"),
-        ("VK", "https://vk.com/{}"),
-        ("OK", "https://ok.ru/{}"),
-        ("Weibo", "https://www.weibo.com/{}"),
-        ("Naver Blog", "https://blog.naver.com/{}"),
-        ("Quora", "https://www.quora.com/profile/{}"),
-        ("Pixelfed Social", "https://pixelfed.social/{}"),
-        ("Stack Overflow", "https://stackoverflow.com/users/{}"),
-        ("Stack Exchange", "https://stackexchange.com/users/{}"),
-        ("Super User", "https://superuser.com/users/{}"),
-        ("Server Fault", "https://serverfault.com/users/{}"),
-        ("Ask Ubuntu", "https://askubuntu.com/users/{}"),
-        ("GeeksforGeeks", "https://auth.geeksforgeeks.org/user/{}/"),
-        ("Hack The Box", "https://app.hackthebox.com/profile/{}"),
-        ("CTFtime", "https://ctftime.org/team/{}"),
-        ("XboxGamertag", "https://xboxgamertag.com/search/{}"),
-        ("PSNProfiles", "https://psnprofiles.com/{}"),
-        ("Nintendo Life", "https://www.nintendolife.com/users/{}"),
-        ("Speedrun.com", "https://www.speedrun.com/user/{}"),
-        ("Dailymotion", "https://www.dailymotion.com/{}"),
-        ("IMDb", "https://www.imdb.com/user/{}"),
-        ("Goodreads", "https://www.goodreads.com/{}"),
-        ("StoryGraph", "https://app.thestorygraph.com/profile/{}"),
-        ("FanFiction", "https://www.fanfiction.net/u/{}"),
-        ("Tripadvisor", "https://www.tripadvisor.com/Profile/{}"),
-        ("Rakuten Viki", "https://www.viki.com/users/{}/about"),
-        ("RAWG", "https://rawg.io/@{}"),
-        ("Paste.ee", "https://paste.ee/u/{}"),
-        ("IFTTT", "https://ifttt.com/p/{}"),
-        ("Trello", "https://trello.com/{}"),
-        ("Notion Site", "https://{}.notion.site"),
-        ("Sketchfab", "https://sketchfab.com/{}"),
-        ("Polywork", "https://www.polywork.com/{}"),
-        ("Peerlist", "https://peerlist.io/{}"),
-        ("OpenSea", "https://opensea.io/{}"),
-        ("Giters", "https://giters.com/{}"),
-        ("LibraryThing", "https://www.librarything.com/profile/{}"),
-        ("Houzz", "https://www.houzz.com/user/{}"),
-        ("Ello", "https://ello.co/{}"),
-        ("SlideShare", "https://www.slideshare.net/{}"),
-        ("Scribd", "https://www.scribd.com/{}"),
-        ("Issuu", "https://issuu.com/{}"),
-        ("NameMC", "https://namemc.com/profile/{}"),
-        ("NationStates", "https://www.nationstates.net/nation={}"),
-        ("ReverbNation", "https://www.reverbnation.com/{}"),
-        ("Smule", "https://www.smule.com/{}"),
-        ("Polarsteps", "https://www.polarsteps.com/{}"),
-        ("Codecademy", "https://www.codecademy.com/profiles/{}"),
-        ("Flipboard", "https://flipboard.com/@{}"),
-        ("Bento", "https://bento.me/{}"),
-        ("Pearltrees", "https://www.pearltrees.com/{}"),
-        ("Shutterstock", "https://www.shutterstock.com/g/{}"),
-        ("EyeEm", "https://www.eyeem.com/u/{}"),
-        ("Civitai", "https://civitai.com/user/{}"),
-        ("Giphy", "https://giphy.com/{}"),
-        ("Myspace", "https://myspace.com/{}"),
-        ("AngelList Legacy", "https://angel.co/u/{}"),
-        ("Crunchbase People", "https://www.crunchbase.com/person/{}"),
-        ("PeerTube", "https://peertube.tv/accounts/{}"),
-        ("Rumble", "https://rumble.com/user/{}"),
-        ("Kick", "https://kick.com/{}"),
-        ("Locals", "https://{}.locals.com"),
-        ("Newgrounds", "https://{}.newgrounds.com"),
-        ("Itch.io", "https://{}.itch.io"),
-        ("Modrinth", "https://modrinth.com/user/{}"),
-        ("CurseForge", "https://www.curseforge.com/members/{}"),
-        ("Planet Minecraft", "https://www.planetminecraft.com/member/{}/"),
-        ("Amino", "https://aminoapps.com/u/{}"),
-        ("Ravelry", "https://www.ravelry.com/people/{}"),
-        ("Inkbunny", "https://inkbunny.net/{}"),
-        ("Fur Affinity", "https://www.furaffinity.net/user/{}"),
-        ("Tapas", "https://tapas.io/{}"),
-        ("Reedsy", "https://reedsy.com/{}"),
-        ("Contently", "https://{}.contently.com"),
-        ("Speaker Deck", "https://speakerdeck.com/{}"),
-        ("Vero", "https://vero.co/{}"),
-        ("Gab", "https://gab.com/{}"),
-        ("Parler", "https://parler.com/profile/{}"),
-        ("Truth Social", "https://truthsocial.com/@{}"),
-        ("Minds", "https://www.minds.com/{}"),
-        ("LiveJournal", "https://{}.livejournal.com"),
-        ("Dreamwidth", "https://{}.dreamwidth.org"),
-        ("Soundgasm", "https://soundgasm.net/u/{}"),
-        ("Read.cv", "https://read.cv/{}"),
-        ("Cara", "https://cara.app/{}"),
-        ("Mastodon Art", "https://mastodon.art/@{}"),
-        ("Fosstodon", "https://fosstodon.org/@{}"),
-        ("Mstdn Social", "https://mstdn.social/@{}"),
-        ("Lemmy World", "https://lemmy.world/u/{}"),
-        ("Kbin Social", "https://kbin.social/u/{}"),
-        ("Write.as", "https://write.as/{}"),
-        ("BuySellAds", "https://www.buysellads.com/{}"),
-        ("GitHub Gist", "https://gist.github.com/{}"),
-        ("ReadTheDocs", "https://readthedocs.org/profiles/{}"),
-        ("AudioJungle", "https://audiojungle.net/user/{}"),
-        ("VideoHive", "https://videohive.net/user/{}"),
-        ("GraphicRiver", "https://graphicriver.net/user/{}"),
-        ("Crowdin", "https://crowdin.com/profile/{}"),
-        ("Transifex", "https://www.transifex.com/user/profile/{}"),
-        ("Anaconda", "https://anaconda.org/{}"),
-        ("DevRant", "https://devrant.com/users/{}"),
-        ("Gitee", "https://gitee.com/{}"),
-        ("SourceForge", "https://sourceforge.net/u/{}/profile"),
-        ("OpenCollective", "https://opencollective.com/{}"),
-        ("Liberapay", "https://liberapay.com/{}"),
-        ("Bookmeter", "https://bookmeter.com/users/{}"),
-        ("Pixelfed FR", "https://pixelfed.fr/{}"),
-        ("Pixelfed UNO", "https://pixelfed.uno/{}"),
-        ("Mastodon Cloud Alt", "https://mastodon.cloud/@{}"),
-        ("ChessTempo", "https://chesstempo.com/profile/{}"),
-        ("BoardGameGeek", "https://boardgamegeek.com/user/{}"),
-        ("RateYourMusic", "https://rateyourmusic.com/~{}"),
-        ("Discogs", "https://www.discogs.com/user/{}"),
-        ("Setlist.fm", "https://www.setlist.fm/user/{}"),
-        ("MobyGames", "https://www.mobygames.com/user/{}"),
-        ("Backloggd", "https://www.backloggd.com/u/{}/"),
-        ("HowLongToBeat", "https://howlongtobeat.com/user/{}"),
-        ("OpenLibrary", "https://openlibrary.org/people/{}"),
-        ("Blipfoto", "https://www.blipfoto.com/{}"),
-        ("Ulule", "https://ulule.com/{}"),
-        ("Shapr3D Community", "https://discourse.shapr3d.com/u/{}"),
-        ("Discourse Meta", "https://meta.discourse.org/u/{}"),
-        ("Kitsu", "https://kitsu.io/users/{}"),
-        ("Mastodon Tech", "https://techhub.social/@{}"),
-        ("SpaceHey", "https://spacehey.com/{}"),
-        ("ModDB", "https://www.moddb.com/members/{}"),
-        ("Comic Fury", "https://{}.comicfury.com"),
-        ("Neocities", "https://{}.neocities.org"),
-        ("Mastodon World", "https://mastodon.world/@{}"),
-        ("Squabbles", "https://squabbles.io/u/{}"),
-        ("Mastodon XYZ", "https://mastodon.xyz/@{}"),
-        ("CounterSocial", "https://counter.social/@{}"),
-        ("Pillowfort", "https://www.pillowfort.social/{}"),
-        ("Bookwyrm Social", "https://bookwyrm.social/user/{}"),
-        ("Mastodon Books", "https://bookstodon.com/@{}"),
-        ("Lemmy ML", "https://lemmy.ml/u/{}"),
-        ("Micro.blog", "https://micro.blog/{}"),
-        ("Post.news", "https://post.news/{}"),
-        ("Mastodon Design", "https://mastodon.design/@{}"),
-        ("Mastodon Games", "https://mastodon.gamedev.place/@{}"),
-    ]
-
-    for name, url in bulk_rules:
-        add(make_rule(
-            name,
-            url,
-            not_found_strings=["page not found", "not found", "404"],
-            auth_strings=["sign in", "login", "log in", "just a moment", "attention required"],
-            positive_strings=["followers", "following", "posts", "projects", "activity", "about", "joined", "profile", "member since"],
-            reliability="medium",
-        ))
 
     return rules
 
 
-def validate_platforms(platforms: Dict[str, PlatformRule]) -> None:
-    seen_urls: Dict[str, str] = {}
-    deduped: Dict[str, PlatformRule] = {}
-    for name, rule in platforms.items():
-        if rule.url in seen_urls:
-            continue
-        seen_urls[rule.url] = name
-        deduped[name] = rule
-    platforms.clear()
-    platforms.update(deduped)
-
-
 PLATFORMS: Dict[str, PlatformRule] = build_platforms()
-validate_platforms(PLATFORMS)
 
 
 def looks_like_generic_redirect(final_url: str, username: str) -> bool:
@@ -1244,7 +611,8 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
     if site_title_negative:
         return "not_found", f"site_not_found_title:{site_title_negative}", "high", 0, 100
 
-    if site_body_negative and username_l in body:
+    # FIXED: do not require username to also be in body
+    if site_body_negative:
         return "not_found", f"site_not_found_body:{site_body_negative}", "high", 0, 95
 
     if neg_regex_hit:
@@ -1299,22 +667,14 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         reasons.append("username_in_body")
 
     site_positive_body = contains_any(body, rule.positive_strings)
-    if site_positive_body and not site_body_negative:
+    if site_positive_body and not site_body_negative and not global_body_hit:
         positive += 16
         reasons.append(f"site_positive_body:{site_positive_body}")
 
     site_positive_title = contains_any(title, rule.title_positive_strings)
-    if site_positive_title and not site_title_negative:
+    if site_positive_title and not site_title_negative and not global_title_hit:
         positive += 18
         reasons.append(f"site_positive_title:{site_positive_title}")
-
-    pos_regexes = compile_patterns([
-        p.replace("{u}", re.escape(username_l)) for p in rule.positive_regex
-    ])
-    pos_regex_hit = regex_hit(body, pos_regexes)
-    if pos_regex_hit and not site_body_negative:
-        positive += 24
-        reasons.append(f"positive_regex:{pos_regex_hit}")
 
     if site_specific_positive_from_json_ld(username, raw_html):
         positive += 28
@@ -1407,7 +767,7 @@ def check_platform(rule: PlatformRule, username: str, timeout: float = DEFAULT_T
             confidence=confidence,
             note=note,
             title=title,
-            matched_rule="site_aware_soft404_engine_v3",
+            matched_rule="site_aware_soft404_engine_v4",
             response_length=len(response.text) if response.text else 0,
             positive_score=pos,
             negative_score=neg,
@@ -1434,28 +794,18 @@ def scan_username(
     timeout: float = DEFAULT_TIMEOUT,
     workers: int = MAX_WORKERS,
     platforms: Optional[Dict[str, PlatformRule]] = None,
-    min_reliability: str = "high",
 ) -> List[ScanResult]:
     if not username or not username.strip():
         raise ValueError("username cannot be empty")
 
-    reliability_order = {"high": 3, "medium": 2, "low": 1}
-    min_score = reliability_order.get(min_reliability, 3)
-
     username = username.strip()
     platform_map = platforms or PLATFORMS
-    filtered_platforms = {
-        name: rule
-        for name, rule in platform_map.items()
-        if reliability_order.get(rule.reliability, 1) >= min_score
-    }
-
     results: List[ScanResult] = []
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, 100))) as executor:
         futures = {
             executor.submit(check_platform, rule, username, timeout): name
-            for name, rule in filtered_platforms.items()
+            for name, rule in platform_map.items()
         }
         for future in as_completed(futures):
             results.append(future.result())
@@ -1528,12 +878,7 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
 
 if __name__ == "__main__":
     username = "bertsec"
-
-    # "high" = only stronger routes
-    # "medium" = broader coverage
-    # "low" = everything
-    results = scan_username(username, timeout=8.0, workers=32, min_reliability="medium")
-
+    results = scan_username(username, timeout=8.0, workers=32)
     print(json.dumps({
         "summary": results_summary(results),
         "results": results_to_dicts(results),
