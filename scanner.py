@@ -17,7 +17,7 @@ PLATFORMS: Dict[str, str] = {
     "Instagram": "https://www.instagram.com/{}/",
     "TikTok": "https://www.tiktok.com/@{}",
     "ArtStation": "https://www.artstation.com/{}",
-    # keep your other platforms here
+    # add the rest of your platforms here
 }
 
 BROWSER_HEADERS = {
@@ -74,37 +74,6 @@ GENERIC_NEGATIVE_BODY = [
     "we could not find the page you were looking for",
 ]
 
-# Only use platform-specific negative phrases where they are actually trustworthy.
-PLATFORM_NEGATIVE_MARKERS: Dict[str, List[str]] = {
-    "Reddit": [
-        "nobody on reddit goes by that name",
-    ],
-    "ArtStation": [
-        "page not found",
-    ],
-    "Twitch": [
-        "sorry. unless you’ve got a time machine",
-    ],
-    "YouTube": [
-        "this page isn't available",
-        "this page isn’t available",
-    ],
-    "TikTok": [
-        "couldn't find this account",
-        "couldn’t find this account",
-    ],
-}
-
-GENERIC_SHELL_TITLES = {
-    "instagram",
-    "threads",
-    "twitch",
-    "tiktok - make your day",
-    "youtube",
-    "artstation - explore",
-    "artstation",
-}
-
 @dataclass
 class ScanResult:
     platform: str
@@ -153,18 +122,6 @@ def contains_any(text: str, needles: List[str]) -> Optional[str]:
         if needle.lower() in text:
             return needle
     return None
-
-
-def final_path(url: str) -> str:
-    try:
-        parsed = urlparse(url)
-        return (parsed.path or "/").lower()
-    except Exception:
-        return "/"
-
-
-def requested_path(url: str) -> str:
-    return final_path(url)
 
 
 def generic_profile_score(username: str, body: str, title: str, final_url: str) -> Tuple[int, int, List[str]]:
@@ -216,7 +173,7 @@ def validate_github(username: str, body: str, title: str, final_url: str) -> Tup
     uname = username.lower()
     pos, neg, reasons = generic_profile_score(username, body, title, final_url)
 
-    if "github.com/" in final_url and f"github.com/{uname}" in final_url:
+    if f"github.com/{uname}" in final_url:
         pos += 20
         reasons.append("github_profile_url")
 
@@ -227,16 +184,13 @@ def validate_github(username: str, body: str, title: str, final_url: str) -> Tup
         "following",
         "repositories",
         "popular repositories",
-        "block or report",
+        "contributions",
     ]
     signal_hits = sum(1 for s in github_profile_signals if s in body)
 
     if signal_hits >= 3:
         pos += 60
         reasons.append("github_profile_signals")
-
-    # Important: GitHub can include "something went wrong" for a widget even on a real profile.
-    # Do NOT treat that as a hard negative globally.
 
     if pos >= 70:
         return "found", "; ".join(reasons), "high", pos, neg
@@ -246,22 +200,48 @@ def validate_github(username: str, body: str, title: str, final_url: str) -> Tup
 
 
 def validate_reddit(username: str, body: str, title: str, final_url: str, status_code: int) -> Tuple[str, str, str, int, int]:
+    uname = username.lower()
     pos, neg, reasons = generic_profile_score(username, body, title, final_url)
 
+    # Canonical Reddit user page
+    if "/user/" in final_url:
+        pos += 15
+        reasons.append("reddit_user_url")
+
+    # Real profile signals
+    reddit_positive_signals = [
+        f"u/{uname}",
+        f"u/{username}",
+        f"#{uname}",
+        "overview",
+        "posts",
+        "comments",
+        "cake day",
+        "karma",
+        "commented",
+        "posted by",
+    ]
+    hits = sum(1 for s in reddit_positive_signals if s in body)
+    if hits >= 3:
+        pos += 70
+        reasons.append("reddit_profile_signals")
+
+    # Actual missing signal
     if "nobody on reddit goes by that name" in body:
         neg += 100
         reasons.append("reddit_missing_phrase")
 
-    if "karma" in body or "cake day" in body or "/user/" in final_url:
-        pos += 35
-        reasons.append("reddit_profile_signals")
-
-    if status_code in (403, 429) and pos < 40 and neg < 80:
+    # If blocked but profile signals are still present, trust the profile
+    if status_code in (403, 429):
+        if pos >= 60:
+            return "found", "; ".join(reasons), "medium", pos, neg
         return "unconfirmed", "reddit_blocked_or_rate_limited", "low", pos, max(neg, 40)
 
     if neg >= 100:
         return "not_found", "; ".join(reasons), "high", pos, neg
-    if pos >= 60:
+    if pos >= 70:
+        return "found", "; ".join(reasons), "high", pos, neg
+    if pos >= 50:
         return "found", "; ".join(reasons), "medium", pos, neg
     return "unconfirmed", "; ".join(reasons), "low", pos, neg
 
@@ -287,6 +267,8 @@ def validate_youtube(username: str, body: str, title: str, final_url: str, statu
         reasons.append("youtube_missing_phrase")
 
     if status_code in (403, 429):
+        if pos >= 60:
+            return "found", "; ".join(reasons), "medium", pos, neg
         return "unconfirmed", "youtube_blocked_or_rate_limited", "low", pos, max(neg, 40)
 
     if neg >= 100:
@@ -304,8 +286,19 @@ def validate_twitch(username: str, body: str, title: str, final_url: str, status
         pos += 20
         reasons.append("twitch_channel_url")
 
-    if '"channelid"' in body or f'"login":"{uname}"' in body or f'"displaylogin":"{uname}"' in body:
-        pos += 60
+    twitch_positive_signals = [
+        f'"login":"{uname}"',
+        f'"displaylogin":"{uname}"',
+        f'"displayname":"{username}"'.lower(),
+        '"channelid"',
+        '"followerscount"',
+        '"profileimageurl"',
+        '"streamtitle"',
+        '"description"',
+    ]
+    hits = sum(1 for s in twitch_positive_signals if s in body)
+    if hits >= 2:
+        pos += 75
         reasons.append("twitch_channel_metadata")
 
     if "sorry. unless you’ve got a time machine" in body or "sorry. unless you've got a time machine" in body:
@@ -313,6 +306,8 @@ def validate_twitch(username: str, body: str, title: str, final_url: str, status
         reasons.append("twitch_missing_phrase")
 
     if status_code in (403, 429):
+        if pos >= 60:
+            return "found", "; ".join(reasons), "medium", pos, neg
         return "unconfirmed", "twitch_blocked_or_rate_limited", "low", pos, max(neg, 40)
 
     if neg >= 100:
@@ -326,23 +321,47 @@ def validate_instagram(username: str, body: str, title: str, final_url: str, sta
     uname = username.lower()
     pos, neg, reasons = generic_profile_score(username, body, title, final_url)
 
+    if f"instagram.com/{uname}" in final_url:
+        pos += 15
+        reasons.append("instagram_profile_url")
+
+    # Strong positive signals you described
+    insta_positive_signals = [
+        f"see more from {uname}",
+        f"see photos, videos and more from {uname}",
+        f'"username":"{uname}"',
+        f'"alternate_name":"{uname}"',
+        '"profilepage_"',
+        '"xdt_api__v1__users__web_profile_info"',
+    ]
+    hits = sum(1 for s in insta_positive_signals if s in body)
+    if hits >= 1:
+        pos += 80
+        reasons.append("instagram_profile_signals")
+
+    # Strong negative signals you described
+    insta_negative_signals = [
+        "profile isn't available",
+        "profile isn’t available",
+        "the link may be broken, or the profile may have been removed",
+    ]
+    neg_hit = contains_any(body, insta_negative_signals)
+    if neg_hit:
+        neg += 100
+        reasons.append(f"instagram_missing_phrase:{neg_hit}")
+
+    # If redirected to login, don't auto-fail; Instagram does that a lot
     if "/accounts/login/" in final_url:
-        neg += 35
+        neg += 20
         reasons.append("instagram_login_redirect")
 
-    if f'"username":"{uname}"' in body or f'"alternate_name":"{uname}"' in body:
-        pos += 70
-        reasons.append("instagram_user_metadata")
-
-    if "this account is private" in body and uname in body:
-        pos += 45
-        reasons.append("instagram_private_but_exists")
-
     if status_code in (403, 429):
+        if pos >= 60:
+            return "found", "; ".join(reasons), "medium", pos, neg
         return "unconfirmed", "instagram_blocked_or_rate_limited", "low", pos, max(neg, 45)
 
-    if neg >= 80 and pos < 40:
-        return "not_found", "; ".join(reasons), "medium", pos, neg
+    if neg >= 100:
+        return "not_found", "; ".join(reasons), "high", pos, neg
     if pos >= 70:
         return "found", "; ".join(reasons), "high", pos, neg
     return "unconfirmed", "; ".join(reasons), "low", pos, neg
@@ -356,15 +375,38 @@ def validate_tiktok(username: str, body: str, title: str, final_url: str, status
         pos += 15
         reasons.append("tiktok_handle_url")
 
-    if "webapp.user-detail" in body or f'"uniqueid":"{uname}"' in body or f'"uniqueid":"@{uname}"' in body:
-        pos += 70
-        reasons.append("tiktok_user_metadata")
+    # Strong positive signals from your example
+    tiktok_positive_signals = [
+        f"@{uname}",
+        f'"uniqueid":"{uname}"',
+        f'"uniqueid":"@{uname}"',
+        "following",
+        "followers",
+        "likes",
+        "no bio yet",
+        "webapp.user-detail",
+    ]
+    hits = sum(1 for s in tiktok_positive_signals if s in body)
+    if hits >= 3:
+        pos += 85
+        reasons.append("tiktok_profile_signals")
 
+    # Strong negative signal from your example
+    tiktok_negative_signals = [
+        "couldn't find this account",
+        "couldn’t find this account",
+        "looking for videos? try browsing our trending creators, hashtags, and sounds.",
+    ]
     if "couldn't find this account" in body or "couldn’t find this account" in body:
         neg += 100
         reasons.append("tiktok_missing_phrase")
+    elif "looking for videos? try browsing our trending creators, hashtags, and sounds." in body and pos < 40:
+        neg += 70
+        reasons.append("tiktok_no_results_shell")
 
     if status_code in (403, 429):
+        if pos >= 60:
+            return "found", "; ".join(reasons), "medium", pos, neg
         return "unconfirmed", "tiktok_blocked_or_rate_limited", "low", pos, max(neg, 45)
 
     if neg >= 100:
@@ -374,18 +416,26 @@ def validate_tiktok(username: str, body: str, title: str, final_url: str, status
     return "unconfirmed", "; ".join(reasons), "low", pos, neg
 
 
-def validate_artstation(username: str, body: str, title: str, final_url: str) -> Tuple[str, str, str, int, int]:
+def validate_artstation(username: str, body: str, title: str, final_url: str, status_code: int) -> Tuple[str, str, str, int, int]:
     uname = username.lower()
     pos, neg, reasons = generic_profile_score(username, body, title, final_url)
 
-    if "/404" in final_url or "/not-found" in final_url:
-        neg += 100
+    # Hard fail if redirected to /404
+    if "/404" in final_url or final_url.endswith("artstation.com/404"):
+        neg += 120
         reasons.append("artstation_404_url")
 
+    # Hard fail if the page itself says page not found and there's no real profile evidence
+    if "page not found" in body and uname not in body:
+        neg += 100
+        reasons.append("artstation_page_not_found")
+
+    # Generic sign-in shell should not count as a profile
     if "sign in with epic games" in body and uname not in body:
         neg += 35
         reasons.append("artstation_generic_signin_shell")
 
+    # Positive profile signals
     if f"artstation.com/{uname}" in final_url and uname in body:
         pos += 35
         reasons.append("artstation_profile_url_and_body")
@@ -394,7 +444,10 @@ def validate_artstation(username: str, body: str, title: str, final_url: str) ->
         pos += 25
         reasons.append("artstation_title_has_username")
 
-    if neg >= 80 and pos < 40:
+    if status_code == 404:
+        return "not_found", "artstation_http_404", "high", 0, 100
+
+    if neg >= 100:
         return "not_found", "; ".join(reasons), "high", pos, neg
     if pos >= 65:
         return "found", "; ".join(reasons), "medium", pos, neg
@@ -404,20 +457,12 @@ def validate_artstation(username: str, body: str, title: str, final_url: str) ->
 def validate_default(platform: str, username: str, body: str, title: str, final_url: str, status_code: int) -> Tuple[str, str, str, int, int]:
     pos, neg, reasons = generic_profile_score(username, body, title, final_url)
 
-    platform_markers = PLATFORM_NEGATIVE_MARKERS.get(platform, [])
-    specific_bad = contains_any(body, platform_markers)
-    if specific_bad:
-        neg += 100
-        reasons.append(f"{platform.lower()}_negative:{specific_bad}")
-
-    if title.lower() in GENERIC_SHELL_TITLES and username.lower() not in body and username.lower() not in final_url:
-        neg += 25
-        reasons.append("generic_shell_title")
-
     if status_code == 404:
         return "not_found", "http_404", "high", 0, 100
 
     if status_code in (401, 403, 429):
+        if pos >= 60:
+            return "found", "; ".join(reasons), "medium", pos, neg
         return "unconfirmed", f"access_restricted:{status_code}", "low", pos, max(neg, 40)
 
     if neg >= 100:
@@ -436,7 +481,7 @@ def score_response(
     status_code: int,
     final_url: str,
 ) -> Tuple[str, str, str, int, int]:
-    body = normalize_text(html[:250000])
+    body = normalize_text(html[:300000])
     title = normalize_text(extract_title(html[:100000]))
     final_url_norm = safe_domain_path(final_url)
 
@@ -453,7 +498,7 @@ def score_response(
         "Twitch": lambda: validate_twitch(username, body, title, final_url_norm, status_code),
         "Instagram": lambda: validate_instagram(username, body, title, final_url_norm, status_code),
         "TikTok": lambda: validate_tiktok(username, body, title, final_url_norm, status_code),
-        "ArtStation": lambda: validate_artstation(username, body, title, final_url_norm),
+        "ArtStation": lambda: validate_artstation(username, body, title, final_url_norm, status_code),
     }
 
     if platform in validators:
@@ -465,11 +510,11 @@ def score_response(
 def humanize_reason(note: Optional[str], state: str, pos: int, neg: int) -> str:
     if state == "found":
         if pos >= 70:
-            return f"Strong profile-specific signals matched this username (score {pos})."
+            return f"Strong platform-specific signals matched this username (score {pos})."
         return f"Likely found based on multiple positive signals (score {pos})."
 
     if state == "not_found":
-        if note and ("404" in note or "negative" in note or "missing" in note):
+        if note and ("404" in note or "missing" in note or "not_found" in note):
             return "The platform returned clear missing-page signals."
         return "The platform strongly indicates that this account does not exist."
 
@@ -478,6 +523,7 @@ def humanize_reason(note: Optional[str], state: str, pos: int, neg: int) -> str:
             return "The platform blocked the request or forced authentication, so this result is not reliable."
         if "server_error" in note:
             return "The platform returned an error page, so the result could not be confirmed."
+
     return "Not enough reliable evidence to classify this account."
 
 
