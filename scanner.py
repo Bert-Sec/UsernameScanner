@@ -51,75 +51,6 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def title_is_explicit_not_found(title: str, username: str) -> bool:
-    title = normalize_text(title)
-    username_l = username.lower()
-
-    hard_patterns = [
-        f"{username_l}: user not found",
-        f"{username_l} - user not found",
-        f"{username_l} | user not found",
-        f"@{username_l} user not found",
-        "user not found",
-        "profile not found",
-        "account not found",
-        "page not found",
-        "no such user",
-        "sorry, this user was not found",
-        "we looked everywhere but couldn't find this page",
-        "we looked everywhere but couldnt find this page",
-        "this account doesn't exist",
-        "this account does not exist",
-    ]
-    return any(p in title for p in hard_patterns)
-
-
-def body_is_explicit_not_found(body: str) -> bool:
-    body = normalize_text(body)
-    hard_patterns = [
-        "user not found",
-        "profile not found",
-        "account not found",
-        "username not found",
-        "requested user was not found",
-        "this account doesn't exist",
-        "this account does not exist",
-        "this profile does not exist",
-        "couldn't find this account",
-        "could not find this account",
-        "the specified profile could not be found",
-        "nobody on reddit goes by that name",
-        "this page does not exist",
-        "the page you requested could not be found",
-        "no such user",
-        "sorry, this user was not found",
-        "we looked everywhere but couldn't find this page",
-        "we looked everywhere but couldnt find this page",
-        "error code 404",
-        "couldn't find this page",
-        "could not find this page",
-    ]
-    return any(p in body for p in hard_patterns)
-
-
-def is_challenge_page(title: str, body: str) -> bool:
-    combined = normalize_text(f"{title} {body[:20000]}")
-    challenge_markers = [
-        "just a moment",
-        "attention required",
-        "checking your browser",
-        "verify you are human",
-        "captcha",
-        "recaptcha",
-        "cf-browser-verification",
-        "cloudflare",
-        "access denied",
-        "temporarily blocked",
-        "please enable javascript and cookies",
-    ]
-    return any(m in combined for m in challenge_markers)
-
-
 def extract_title(html_text: str) -> str:
     match = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.IGNORECASE | re.DOTALL)
     if not match:
@@ -188,11 +119,7 @@ GLOBAL_NEGATIVE_TITLE = [
     "missing page",
     "private site",
     "something went wrong",
-    "just a moment",
-    "attention required",
     "access denied",
-    "sign in",
-    "login",
     "no such user",
 ]
 
@@ -233,20 +160,26 @@ GLOBAL_NEGATIVE_BODY = [
     "error code 404",
 ]
 
+# Keep broad login strings OUT of challenge detection
 GLOBAL_AUTH_STRINGS = [
     "sign in",
     "login",
     "log in",
     "sign up",
     "join now",
-    "checking your browser",
+]
+
+GLOBAL_CHALLENGE_STRINGS = [
+    "just a moment",
     "attention required",
+    "checking your browser",
     "verify you are human",
     "captcha",
     "recaptcha",
-    "access denied",
-    "temporarily restricted",
-    "enable javascript and cookies to continue",
+    "cf-browser-verification",
+    "cloudflare",
+    "temporarily blocked",
+    "please enable javascript and cookies",
 ]
 
 GLOBAL_NEGATIVE_URL_MARKERS = [
@@ -373,6 +306,39 @@ def build_platforms() -> Dict[str, PlatformRule]:
         rules[rule.name] = rule
 
     add(make_rule(
+        "Reddit",
+        "https://www.reddit.com/user/{}/",
+        not_found_strings=[
+            "nobody on reddit goes by that name",
+            "page not found",
+        ],
+        title_not_found_strings=[
+            "page not found",
+        ],
+        # login text exists on real reddit pages, so don't use it as auth_strings here
+        auth_strings=[],
+        positive_strings=[
+            "posts",
+            "comments",
+            "karma",
+            "cake day",
+            "u/",
+        ],
+        title_positive_strings=[
+            "reddit",
+        ],
+        positive_regex=[
+            r"\bu/{u}\b",
+            r"\bkarma\b",
+            r"\bcake day\b",
+        ],
+        negative_regex=[
+            r"nobody on reddit goes by that name",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    add(make_rule(
         "Crates.io",
         "https://crates.io/users/{}",
         not_found_strings=[
@@ -393,6 +359,54 @@ def build_platforms() -> Dict[str, PlatformRule]:
         negative_regex=[
             r"\b{u}\b\s*:\s*user not found",
             r"\buser not found\b",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    add(make_rule(
+        "PyPI",
+        "https://pypi.org/user/{}",
+        not_found_strings=[
+            "we looked everywhere but couldn't find this page",
+            "we looked everywhere but couldnt find this page",
+            "error code 404",
+            "404 not found",
+            "not found",
+        ],
+        title_not_found_strings=[
+            "404 not found",
+            "not found",
+        ],
+        positive_strings=[
+            "projects",
+            "releases",
+        ],
+        negative_regex=[
+            r"we looked everywhere but couldn'?t find this page",
+            r"\berror code 404\b",
+        ],
+        must_keep_username_in_final_url=True,
+    ))
+
+    add(make_rule(
+        "Hacker News",
+        "https://news.ycombinator.com/user?id={}",
+        not_found_strings=[
+            "no such user",
+            "user not found",
+        ],
+        title_not_found_strings=[
+            "no such user",
+        ],
+        positive_strings=[
+            "created",
+            "karma",
+            "about",
+            "submissions",
+            "comments",
+        ],
+        negative_regex=[
+            r"\bno such user\b",
         ],
         must_keep_username_in_final_url=True,
     ))
@@ -423,94 +437,10 @@ def build_platforms() -> Dict[str, PlatformRule]:
         must_keep_username_in_final_url=True,
     ))
 
-    add(make_rule(
-        "Hacker News",
-        "https://news.ycombinator.com/user?id={}",
-        not_found_strings=[
-            "no such user",
-            "user not found",
-        ],
-        title_not_found_strings=[
-            "no such user",
-        ],
-        positive_strings=[
-            "created",
-            "karma",
-            "about",
-            "submissions",
-            "comments",
-        ],
-        negative_regex=[
-            r"\bno such user\b",
-        ],
-        must_keep_username_in_final_url=True,
-    ))
-
-    add(make_rule(
-        "PyPI",
-        "https://pypi.org/user/{}",
-        not_found_strings=[
-            "we looked everywhere but couldn't find this page",
-            "we looked everywhere but couldnt find this page",
-            "error code 404",
-            "404 not found",
-            "not found",
-        ],
-        title_not_found_strings=[
-            "404 not found",
-            "not found",
-        ],
-        positive_strings=[
-            "projects",
-            "releases",
-        ],
-        negative_regex=[
-            r"we looked everywhere but couldn'?t find this page",
-            r"\berror code 404\b",
-        ],
-        must_keep_username_in_final_url=True,
-    ))
-
-    # Keep some other examples from your larger set
-    add(make_rule(
-        "GitHub", "https://github.com/{}",
-        not_found_strings=["not found"],
-        title_positive_strings=["github", "@"],
-        positive_strings=["followers", "following", "repositories", "contributions"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "GitLab", "https://gitlab.com/{}",
-        not_found_strings=["page not found", "the page could not be found"],
-        positive_strings=["projects", "followers", "following", "activity"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "Reddit", "https://www.reddit.com/user/{}",
-        not_found_strings=["nobody on reddit goes by that name", "page not found"],
-        positive_strings=["karma", "cake day", "posts", "comments"],
-        must_keep_username_in_final_url=True,
-    ))
-    add(make_rule(
-        "YouTube", "https://www.youtube.com/@{}",
-        not_found_strings=["this page isn't available", "page not found"],
-        positive_strings=["videos", "subscribers", "joined"],
-        must_keep_username_in_final_url=True,
-    ))
-
     return rules
 
 
 PLATFORMS: Dict[str, PlatformRule] = build_platforms()
-
-
-def looks_like_generic_redirect(final_url: str, username: str) -> bool:
-    username_l = username.lower()
-    parsed = urlparse(final_url if "://" in final_url else "https://" + final_url)
-    path = (parsed.path or "/").lower().rstrip("/") or "/"
-    if username_l in final_url.lower():
-        return False
-    return path in GENERIC_REDIRECT_PATHS
 
 
 def extract_json_ld_candidates(html_text: str) -> List[str]:
@@ -529,6 +459,69 @@ def site_specific_positive_from_json_ld(username: str, html_text: str) -> bool:
             if username_l in norm:
                 return True
     return False
+
+
+def title_is_explicit_not_found(title: str, username: str) -> bool:
+    title = normalize_text(title)
+    username_l = username.lower()
+    hard_patterns = [
+        f"{username_l}: user not found",
+        f"{username_l} - user not found",
+        f"{username_l} | user not found",
+        "user not found",
+        "profile not found",
+        "account not found",
+        "page not found",
+        "no such user",
+        "sorry, this user was not found",
+        "we looked everywhere but couldn't find this page",
+        "we looked everywhere but couldnt find this page",
+        "this account doesn't exist",
+        "this account does not exist",
+    ]
+    return any(p in title for p in hard_patterns)
+
+
+def body_is_explicit_not_found(body: str) -> bool:
+    body = normalize_text(body)
+    hard_patterns = [
+        "user not found",
+        "profile not found",
+        "account not found",
+        "username not found",
+        "requested user was not found",
+        "this account doesn't exist",
+        "this account does not exist",
+        "this profile does not exist",
+        "couldn't find this account",
+        "could not find this account",
+        "the specified profile could not be found",
+        "nobody on reddit goes by that name",
+        "this page does not exist",
+        "the page you requested could not be found",
+        "no such user",
+        "sorry, this user was not found",
+        "we looked everywhere but couldn't find this page",
+        "we looked everywhere but couldnt find this page",
+        "error code 404",
+        "couldn't find this page",
+        "could not find this page",
+    ]
+    return any(p in body for p in hard_patterns)
+
+
+def is_challenge_page(title: str, body: str) -> bool:
+    combined = normalize_text(f"{title} {body[:20000]}")
+    return any(m in combined for m in GLOBAL_CHALLENGE_STRINGS)
+
+
+def looks_like_generic_redirect(final_url: str, username: str) -> bool:
+    username_l = username.lower()
+    parsed = urlparse(final_url if "://" in final_url else "https://" + final_url)
+    path = (parsed.path or "/").lower().rstrip("/") or "/"
+    if username_l in final_url.lower():
+        return False
+    return path in GENERIC_REDIRECT_PATHS
 
 
 def has_strong_positive_evidence(
@@ -556,6 +549,65 @@ def has_strong_positive_evidence(
     return signals >= 2
 
 
+def site_override(username: str, rule: PlatformRule, response: requests.Response) -> Optional[Tuple[str, str, str, int, int]]:
+    raw_html = response.text[:MAX_BODY_BYTES]
+    body = normalize_text(raw_html)
+    title = normalize_text(extract_title(raw_html))
+    final_url = safe_domain_path(response.url)
+    username_l = username.lower()
+
+    # Crates.io hard rules
+    if rule.name == "Crates.io":
+        if "user not found" in title or "user not found" in body:
+            return ("not_found", "cratesio_explicit_not_found", "high", 0, 100)
+        if response.status_code in (404, 410):
+            return ("not_found", "cratesio_404", "high", 0, 100)
+
+    # PyPI hard rules
+    if rule.name == "PyPI":
+        if response.status_code in (404, 410):
+            return ("not_found", "pypi_404", "high", 0, 100)
+        if (
+            "we looked everywhere but couldn't find this page" in body
+            or "we looked everywhere but couldnt find this page" in body
+            or "error code 404" in body
+        ):
+            return ("not_found", "pypi_explicit_not_found", "high", 0, 100)
+
+    # Hacker News hard rules
+    if rule.name == "Hacker News":
+        if "no such user" in body or "no such user" in title:
+            return ("not_found", "hn_explicit_not_found", "high", 0, 100)
+
+    # eBay hard rules
+    if rule.name == "eBay":
+        if "sorry, this user was not found" in body or "sorry, this user was not found" in title:
+            return ("not_found", "ebay_explicit_not_found", "high", 0, 100)
+
+    # Reddit special handling
+    if rule.name == "Reddit":
+        # Explicit negative
+        if "nobody on reddit goes by that name" in body:
+            return ("not_found", "reddit_explicit_not_found", "high", 0, 100)
+
+        # If the page is on the expected user URL and has clear reddit profile signals,
+        # do not let login/signup text downgrade it.
+        if (
+            username_l in final_url
+            and (
+                f"u/{username_l}" in body
+                or "posts" in body
+                or "comments" in body
+                or "karma" in body
+                or "cake day" in body
+                or username_l in title
+            )
+        ):
+            return ("found", "reddit_profile_signals", "high", 85, 5)
+
+    return None
+
+
 def score_response(username: str, rule: PlatformRule, response: requests.Response) -> Tuple[str, str, str, int, int]:
     raw_html = response.text[:MAX_BODY_BYTES]
     body = normalize_text(raw_html)
@@ -565,6 +617,10 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
     final_url = safe_domain_path(response.url)
     request_url = safe_domain_path(response.request.url)
     username_l = username.lower()
+
+    override = site_override(username, rule, response)
+    if override is not None:
+        return override
 
     positive = 0
     negative = 0
@@ -596,6 +652,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
 
     global_title_hit = contains_any(title, GLOBAL_NEGATIVE_TITLE)
     global_body_hit = contains_any(body, GLOBAL_NEGATIVE_BODY)
+    # Only weak auth text here now
     global_auth_hit = contains_any(early_body, GLOBAL_AUTH_STRINGS)
     url_negative_hit = contains_any(final_url, GLOBAL_NEGATIVE_URL_MARKERS)
 
@@ -611,7 +668,6 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
     if site_title_negative:
         return "not_found", f"site_not_found_title:{site_title_negative}", "high", 0, 100
 
-    # FIXED: do not require username to also be in body
     if site_body_negative:
         return "not_found", f"site_not_found_body:{site_body_negative}", "high", 0, 95
 
@@ -626,9 +682,10 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         negative += 45
         reasons.append(f"body_negative:{global_body_hit}")
 
+    # Do not make weak login text decisive anymore
     if global_auth_hit:
-        negative += 18
-        reasons.append(f"auth_wall:{global_auth_hit}")
+        negative += 5
+        reasons.append(f"weak_auth_ui:{global_auth_hit}")
 
     if url_negative_hit:
         negative += 50
@@ -767,7 +824,7 @@ def check_platform(rule: PlatformRule, username: str, timeout: float = DEFAULT_T
             confidence=confidence,
             note=note,
             title=title,
-            matched_rule="site_aware_soft404_engine_v4",
+            matched_rule="site_aware_soft404_engine_v5",
             response_length=len(response.text) if response.text else 0,
             positive_score=pos,
             negative_score=neg,
@@ -842,6 +899,21 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
     if note.startswith("unexpected_content_type:"):
         return "The site returned a non-HTML response, so the result could not be evaluated confidently."
 
+    if "reddit_profile_signals" in note:
+        return "The Reddit page showed real profile signals, so weak login UI text was ignored."
+
+    if "cratesio_explicit_not_found" in note:
+        return "Crates.io explicitly said the user was not found."
+
+    if "pypi_explicit_not_found" in note or "pypi_404" in note:
+        return "PyPI returned an explicit missing-page response."
+
+    if "hn_explicit_not_found" in note:
+        return "Hacker News explicitly said no such user exists."
+
+    if "ebay_explicit_not_found" in note:
+        return "eBay explicitly said the user was not found."
+
     if "hard_404_status" in note:
         return "The site returned a hard 404 or 410 response, so the account was classified as not found."
 
@@ -860,8 +932,8 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
     if "generic_shell_title" in note or "tiny_body_without_username" in note:
         return "The response looked like a generic shell page or weak wrapper page rather than a real user profile."
 
-    if "auth_wall" in note or "site_auth" in note or "restricted_403" in note or "rate_limited_429" in note or "challenge_page" in note:
-        return "The site presented a login wall, anti-bot control, or request restriction, so the result was left unconfirmed."
+    if "challenge_page" in note or "restricted_403" in note or "rate_limited_429" in note:
+        return "The site presented a real anti-bot control or request restriction, so the result was left unconfirmed."
 
     if state == "found":
         if positive_score >= 70:
