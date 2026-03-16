@@ -335,13 +335,25 @@ def build_platforms() -> Dict[str, PlatformRule]:
         must_keep_username_in_final_url=True,
     ))
     add(make_rule(
-        "Crates.io", "https://crates.io/users/{}",
-        not_found_strings=["user not found", "not found"],
-        title_not_found_strings=["user not found", "not found"],
-        positive_strings=["crates", "following"],
-        title_positive_strings=["crates.io"],
-        must_keep_username_in_final_url=True,
-    ))
+    "Crates.io",
+    "https://crates.io/users/{}",
+    not_found_strings=[
+        "user not found",
+        "not found",
+    ],
+    title_not_found_strings=[
+        "user not found",
+        "not found",
+    ],
+    positive_strings=[
+        "crates",
+        "following",
+    ],
+    title_positive_strings=[
+        "crates.io",
+    ],
+    must_keep_username_in_final_url=True,
+))
     add(make_rule(
         "RubyGems", "https://rubygems.org/profiles/{}",
         not_found_strings=["this page could not be found", "not found"],
