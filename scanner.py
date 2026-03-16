@@ -29,7 +29,25 @@ MAX_BODY_BYTES = 300_000
 
 _thread_local = threading.local()
 
+def title_is_explicit_not_found(title: str, username: str) -> bool:
+    title = normalize_text(title)
+    username_l = username.lower()
 
+    hard_patterns = [
+        f"{username_l}: user not found",
+        f"{username_l} - user not found",
+        f"{username_l} | user not found",
+        f"@{username_l} user not found",
+        "user not found",
+        "profile not found",
+        "account not found",
+        "page not found",
+        "this account doesn't exist",
+        "this account does not exist",
+    ]
+
+    return any(p in title for p in hard_patterns)
+    
 def normalize_text(text: str) -> str:
     text = text or ""
     text = unquote(text)
