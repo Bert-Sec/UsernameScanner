@@ -1147,45 +1147,64 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         return "unconfirmed", "server_error", "low", 0, 30
 
     global_title_hit = contains_any(title, GLOBAL_NEGATIVE_TITLE)
+    global_body_hit = contains_any(body, GLOBAL_NEGATIVE_BODY)
+    global_auth_hit = contains_any(early_body, GLOBAL_AUTH_STRINGS)
+    url_negative_hit = contains_any(final_url, GLOBAL_NEGATIVE_URL_MARKERS)
+
+    site_body_negative = contains_any(body, rule.not_found_strings)
+    site_title_negative = contains_any(title, rule.title_not_found_strings)
+    site_auth_negative = contains_any(early_body, rule.auth_strings)
+
+    negative_regexes = compile_patterns(rule.negative_regex)
+    neg_regex_hit = regex_hit(body, negative_regexes)
+
+    # ------------------------------------------------------------
+    # HARD STOPS: site-specific negatives must win immediately
+    # ------------------------------------------------------------
+    # Example: "bertsec: user not found" on crates.io
+    if site_title_negative:
+        return "not_found", f"site_not_found_title:{site_title_negative}", "high", 0, 100
+
+    # If the title includes both the username and a not-found marker, this is also a hard stop
+    if username_l in title and (
+        "user not found" in title
+        or "profile not found" in title
+        or "account not found" in title
+        or "page not found" in title
+        or "this account doesn't exist" in title
+        or "this account does not exist" in title
+    ):
+        return "not_found", "title_username_plus_not_found", "high", 0, 100
+
+    # Strong site body negatives should also beat generic positives
+    if site_body_negative and username_l in body:
+        return "not_found", f"site_not_found_body:{site_body_negative}", "high", 0, 95
+
+    if neg_regex_hit:
+        return "not_found", f"negative_regex:{neg_regex_hit}", "high", 0, 95
+
+    # ------------------------------------------------------------
+    # Continue with weighted scoring only if no hard stop matched
+    # ------------------------------------------------------------
     if global_title_hit:
         negative += 35
         reasons.append(f"title_negative:{global_title_hit}")
 
-    global_body_hit = contains_any(body, GLOBAL_NEGATIVE_BODY)
     if global_body_hit:
         negative += 45
         reasons.append(f"body_negative:{global_body_hit}")
 
-    global_auth_hit = contains_any(early_body, GLOBAL_AUTH_STRINGS)
     if global_auth_hit:
         negative += 18
         reasons.append(f"auth_wall:{global_auth_hit}")
 
-    url_negative_hit = contains_any(final_url, GLOBAL_NEGATIVE_URL_MARKERS)
     if url_negative_hit:
         negative += 50
         reasons.append(f"url_negative:{url_negative_hit}")
 
-    site_body_negative = contains_any(body, rule.not_found_strings)
-    if site_body_negative:
-        negative += 70
-        reasons.append(f"site_not_found_body:{site_body_negative}")
-
-    site_title_negative = contains_any(title, rule.title_not_found_strings)
-    if site_title_negative:
-        negative += 75
-        reasons.append(f"site_not_found_title:{site_title_negative}")
-
-    site_auth_negative = contains_any(early_body, rule.auth_strings)
     if site_auth_negative:
         negative += 20
         reasons.append(f"site_auth:{site_auth_negative}")
-
-    negative_regexes = compile_patterns(rule.negative_regex)
-    neg_regex_hit = regex_hit(body, negative_regexes)
-    if neg_regex_hit:
-        negative += 60
-        reasons.append(f"negative_regex:{neg_regex_hit}")
 
     redirected = response.url.rstrip("/").lower() != response.request.url.rstrip("/").lower()
     if redirected:
@@ -1203,7 +1222,9 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
             negative += 35
             reasons.append("username_missing_from_final_url")
 
-    if username_l in title and not site_title_negative:
+    # IMPORTANT:
+    # Do NOT award username_in_title if title is negative in any way
+    if username_l in title and not global_title_hit and not site_title_negative:
         positive += 24
         reasons.append("username_in_title")
 
@@ -1211,17 +1232,17 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         positive += 12
         reasons.append("username_in_url")
 
-    if username_l in body:
+    if username_l in body and not site_body_negative:
         positive += 8
         reasons.append("username_in_body")
 
     site_positive_body = contains_any(body, rule.positive_strings)
-    if site_positive_body:
+    if site_positive_body and not site_body_negative:
         positive += 16
         reasons.append(f"site_positive_body:{site_positive_body}")
 
     site_positive_title = contains_any(title, rule.title_positive_strings)
-    if site_positive_title:
+    if site_positive_title and not site_title_negative:
         positive += 18
         reasons.append(f"site_positive_title:{site_positive_title}")
 
@@ -1229,7 +1250,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         p.replace("{u}", re.escape(username_l)) for p in rule.positive_regex
     ])
     pos_regex_hit = regex_hit(body, pos_regexes)
-    if pos_regex_hit:
+    if pos_regex_hit and not site_body_negative:
         positive += 24
         reasons.append(f"positive_regex:{pos_regex_hit}")
 
@@ -1237,7 +1258,6 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         positive += 28
         reasons.append("jsonld_person_with_username")
 
-    # Generic profile cues
     if any(x in body for x in ["followers", "following", "posts", "projects", "repositories", "member since", "joined", "about"]):
         positive += 10
         reasons.append("generic_profile_signal")
@@ -1260,7 +1280,6 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
 
     delta = positive - negative
 
-    # Hard not_found if strong site-specific negatives hit
     if negative >= 70 and delta <= -15:
         confidence = "high" if negative >= 90 else "medium"
         return "not_found", "; ".join(reasons), confidence, positive, negative
@@ -1268,11 +1287,6 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
     if positive >= 45 and delta >= 12:
         confidence = "high" if positive >= 70 else "medium"
         return "found", "; ".join(reasons), confidence, positive, negative
-
-    # If there is a direct site-specific not-found marker, do not let weak positives rescue it
-    if site_body_negative or site_title_negative:
-        confidence = "high" if negative >= 80 else "medium"
-        return "not_found", "; ".join(reasons), confidence, positive, negative
 
     if negative >= 55 and delta <= -10:
         confidence = "high" if negative >= 85 else "medium"
@@ -1282,7 +1296,6 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         return "found", "; ".join(reasons), "medium", positive, negative
 
     return "unconfirmed", "; ".join(reasons) if reasons else "weak_or_conflicting_signals", "low", positive, negative
-
 
 def check_platform(rule: PlatformRule, username: str, timeout: float = DEFAULT_TIMEOUT) -> ScanResult:
     url = rule.url.format(username)
