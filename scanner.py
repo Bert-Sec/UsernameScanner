@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Pattern, Tuple
 from urllib.parse import urlparse, unquote
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 HEADERS = {
@@ -29,6 +31,26 @@ MAX_BODY_BYTES = 300_000
 
 _thread_local = threading.local()
 
+
+def normalize_text(text: str) -> str:
+    text = text or ""
+    text = unquote(text)
+    text = text.lower()
+    replacements = {
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u00a0": " ",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def title_is_explicit_not_found(title: str, username: str) -> bool:
     title = normalize_text(title)
     username_l = username.lower()
@@ -45,17 +67,46 @@ def title_is_explicit_not_found(title: str, username: str) -> bool:
         "this account doesn't exist",
         "this account does not exist",
     ]
-
     return any(p in title for p in hard_patterns)
-    
-def normalize_text(text: str) -> str:
-    text = text or ""
-    text = unquote(text)
-    text = text.lower()
-    text = text.replace("\u2019", "'").replace("\u2018", "'")
-    text = text.replace("\u201c", '"').replace("\u201d", '"')
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+
+
+def body_is_explicit_not_found(body: str) -> bool:
+    body = normalize_text(body)
+    hard_patterns = [
+        "user not found",
+        "profile not found",
+        "account not found",
+        "username not found",
+        "requested user was not found",
+        "this account doesn't exist",
+        "this account does not exist",
+        "this profile does not exist",
+        "couldn't find this account",
+        "could not find this account",
+        "the specified profile could not be found",
+        "nobody on reddit goes by that name",
+        "this page does not exist",
+        "the page you requested could not be found",
+    ]
+    return any(p in body for p in hard_patterns)
+
+
+def is_challenge_page(title: str, body: str) -> bool:
+    combined = normalize_text(f"{title} {body[:20000]}")
+    challenge_markers = [
+        "just a moment",
+        "attention required",
+        "checking your browser",
+        "verify you are human",
+        "captcha",
+        "recaptcha",
+        "cf-browser-verification",
+        "cloudflare",
+        "access denied",
+        "temporarily blocked",
+        "please enable javascript and cookies",
+    ]
+    return any(m in combined for m in challenge_markers)
 
 
 def extract_title(html_text: str) -> str:
@@ -89,6 +140,20 @@ def get_session() -> requests.Session:
     if session is None:
         session = requests.Session()
         session.headers.update(HEADERS)
+
+        retry = Retry(
+            total=2,
+            read=2,
+            connect=2,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "HEAD"],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=100, pool_maxsize=100)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+
         _thread_local.session = session
     return session
 
@@ -235,6 +300,7 @@ class PlatformRule:
     allow_homepage_redirect: bool = False
     treat_403_as_unconfirmed: bool = True
     treat_429_as_unconfirmed: bool = True
+    reliability: str = "high"
 
 
 @dataclass
@@ -271,6 +337,7 @@ def make_rule(
     allow_homepage_redirect: bool = False,
     treat_403_as_unconfirmed: bool = True,
     treat_429_as_unconfirmed: bool = True,
+    reliability: str = "high",
 ) -> PlatformRule:
     return PlatformRule(
         name=name,
@@ -286,6 +353,7 @@ def make_rule(
         allow_homepage_redirect=allow_homepage_redirect,
         treat_403_as_unconfirmed=treat_403_as_unconfirmed,
         treat_429_as_unconfirmed=treat_429_as_unconfirmed,
+        reliability=reliability,
     )
 
 
@@ -295,7 +363,6 @@ def build_platforms() -> Dict[str, PlatformRule]:
     def add(rule: PlatformRule) -> None:
         rules[rule.name] = rule
 
-    # Core high-value platforms with site-specific tuning
     add(make_rule(
         "GitHub", "https://github.com/{}",
         not_found_strings=["not found"],
@@ -330,6 +397,7 @@ def build_platforms() -> Dict[str, PlatformRule]:
     add(make_rule(
         "Hugging Face", "https://huggingface.co/{}",
         not_found_strings=["user not found", "404"],
+        title_not_found_strings=["user not found"],
         positive_strings=["models", "datasets", "spaces", "followers"],
         title_positive_strings=["hugging face"],
         must_keep_username_in_final_url=True,
@@ -353,25 +421,15 @@ def build_platforms() -> Dict[str, PlatformRule]:
         must_keep_username_in_final_url=True,
     ))
     add(make_rule(
-    "Crates.io",
-    "https://crates.io/users/{}",
-    not_found_strings=[
-        "user not found",
-        "not found",
-    ],
-    title_not_found_strings=[
-        "user not found",
-        "not found",
-    ],
-    positive_strings=[
-        "crates",
-        "following",
-    ],
-    title_positive_strings=[
-        "crates.io",
-    ],
-    must_keep_username_in_final_url=True,
-))
+        "Crates.io",
+        "https://crates.io/users/{}",
+        not_found_strings=["user not found", "not found"],
+        title_not_found_strings=["user not found", "not found"],
+        positive_strings=["crates", "following"],
+        title_positive_strings=["crates.io"],
+        negative_regex=[r"\b{u}\b\s*:\s*user not found", r"\buser not found\b"],
+        must_keep_username_in_final_url=True,
+    ))
     add(make_rule(
         "RubyGems", "https://rubygems.org/profiles/{}",
         not_found_strings=["this page could not be found", "not found"],
@@ -853,12 +911,14 @@ def build_platforms() -> Dict[str, PlatformRule]:
         "ResearchGate", "https://www.researchgate.net/profile/{}",
         not_found_strings=["page not found", "not found"],
         positive_strings=["publications", "citations", "reads"],
+        reliability="medium",
     ))
     add(make_rule(
         "ORCID", "https://orcid.org/{}",
         not_found_strings=["record not found", "not found"],
         positive_strings=["works", "employment", "education"],
         must_keep_username_in_final_url=True,
+        reliability="medium",
     ))
     add(make_rule(
         "Muck Rack", "https://muckrack.com/{}",
@@ -879,7 +939,6 @@ def build_platforms() -> Dict[str, PlatformRule]:
         must_keep_username_in_final_url=True,
     ))
 
-    # Large extension set to break 200+
     bulk_rules = [
         ("Gitea", "https://gitea.com/{}"),
         ("Forgejo", "https://codeberg.org/{}"),
@@ -914,7 +973,6 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("Naver Blog", "https://blog.naver.com/{}"),
         ("Quora", "https://www.quora.com/profile/{}"),
         ("Pixelfed Social", "https://pixelfed.social/{}"),
-        ("Discord Vanity Guess", "https://discord.com/users/{}"),
         ("Stack Overflow", "https://stackoverflow.com/users/{}"),
         ("Stack Exchange", "https://stackexchange.com/users/{}"),
         ("Super User", "https://superuser.com/users/{}"),
@@ -923,39 +981,25 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("GeeksforGeeks", "https://auth.geeksforgeeks.org/user/{}/"),
         ("Hack The Box", "https://app.hackthebox.com/profile/{}"),
         ("CTFtime", "https://ctftime.org/team/{}"),
-        ("Roblox", "https://www.roblox.com/users/profile?username={}"),
         ("XboxGamertag", "https://xboxgamertag.com/search/{}"),
         ("PSNProfiles", "https://psnprofiles.com/{}"),
         ("Nintendo Life", "https://www.nintendolife.com/users/{}"),
         ("Speedrun.com", "https://www.speedrun.com/user/{}"),
         ("Dailymotion", "https://www.dailymotion.com/{}"),
-        ("Spotify User", "https://open.spotify.com/user/{}"),
-        ("Deezer", "https://www.deezer.com/us/profile/{}"),
         ("IMDb", "https://www.imdb.com/user/{}"),
         ("Goodreads", "https://www.goodreads.com/{}"),
         ("StoryGraph", "https://app.thestorygraph.com/profile/{}"),
         ("FanFiction", "https://www.fanfiction.net/u/{}"),
         ("Tripadvisor", "https://www.tripadvisor.com/Profile/{}"),
-        ("Strava", "https://www.strava.com/athletes/{}"),
-        ("Garmin Connect", "https://connect.garmin.com/modern/profile/{}"),
-        ("Runkeeper", "https://runkeeper.com/user/{}"),
-        ("Couchsurfing", "https://www.couchsurfing.com/people/{}"),
-        ("TripIt", "https://www.tripit.com/people/{}"),
-        ("Cash App", "https://cash.app/${}"),
-        ("Mercari", "https://www.mercari.com/u/{}/"),
         ("Rakuten Viki", "https://www.viki.com/users/{}/about"),
         ("RAWG", "https://rawg.io/@{}"),
         ("Paste.ee", "https://paste.ee/u/{}"),
         ("IFTTT", "https://ifttt.com/p/{}"),
         ("Trello", "https://trello.com/{}"),
         ("Notion Site", "https://{}.notion.site"),
-        ("Miro", "https://miro.com/app/board/{}"),
-        ("Figma Community", "https://www.figma.com/@{}"),
         ("Sketchfab", "https://sketchfab.com/{}"),
         ("Polywork", "https://www.polywork.com/{}"),
         ("Peerlist", "https://peerlist.io/{}"),
-        ("Academia", "https://independent.academia.edu/{}"),
-        ("Google Scholar", "https://scholar.google.com/citations?user={}"),
         ("OpenSea", "https://opensea.io/{}"),
         ("Giters", "https://giters.com/{}"),
         ("LibraryThing", "https://www.librarything.com/profile/{}"),
@@ -964,7 +1008,6 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("SlideShare", "https://www.slideshare.net/{}"),
         ("Scribd", "https://www.scribd.com/{}"),
         ("Issuu", "https://issuu.com/{}"),
-        ("Battle.net Search", "https://worldofwarcraft.blizzard.com/en-us/search?q={}"),
         ("NameMC", "https://namemc.com/profile/{}"),
         ("NationStates", "https://www.nationstates.net/nation={}"),
         ("ReverbNation", "https://www.reverbnation.com/{}"),
@@ -979,14 +1022,9 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("Civitai", "https://civitai.com/user/{}"),
         ("Giphy", "https://giphy.com/{}"),
         ("Myspace", "https://myspace.com/{}"),
-        ("Ko-fi Shop", "https://ko-fi.com/{}"),
         ("AngelList Legacy", "https://angel.co/u/{}"),
         ("Crunchbase People", "https://www.crunchbase.com/person/{}"),
-        ("Pixelfed", "https://pixelfed.social/{}"),
-        ("Mastodon", "https://mastodon.social/@{}"),
         ("PeerTube", "https://peertube.tv/accounts/{}"),
-        ("BookBub", "https://www.bookbub.com/profile/{}"),
-        ("Bookshop", "https://bookshop.org/shop/{}"),
         ("Rumble", "https://rumble.com/user/{}"),
         ("Kick", "https://kick.com/{}"),
         ("Locals", "https://{}.locals.com"),
@@ -995,31 +1033,22 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("Modrinth", "https://modrinth.com/user/{}"),
         ("CurseForge", "https://www.curseforge.com/members/{}"),
         ("Planet Minecraft", "https://www.planetminecraft.com/member/{}/"),
-        ("MCPEDL", "https://mcpedl.com/user/{}"),
         ("Amino", "https://aminoapps.com/u/{}"),
-        ("Koo", "https://www.kooapp.com/profile/{}"),
         ("Ravelry", "https://www.ravelry.com/people/{}"),
         ("Inkbunny", "https://inkbunny.net/{}"),
         ("Fur Affinity", "https://www.furaffinity.net/user/{}"),
         ("Tapas", "https://tapas.io/{}"),
-        ("Webtoon Canvas", "https://www.webtoons.com/creator/{}"),
         ("Reedsy", "https://reedsy.com/{}"),
         ("Contently", "https://{}.contently.com"),
-        ("Clapper", "https://clapperapp.com/{}"),
-        ("Speakrj", "https://speakerhub.com/speaker/{}"),
         ("Speaker Deck", "https://speakerdeck.com/{}"),
-        ("Tripadvisor Legacy", "https://tripadvisor.com/members/{}"),
         ("Vero", "https://vero.co/{}"),
-        ("MeWe", "https://mewe.com/i/{}"),
         ("Gab", "https://gab.com/{}"),
         ("Parler", "https://parler.com/profile/{}"),
         ("Truth Social", "https://truthsocial.com/@{}"),
         ("Minds", "https://www.minds.com/{}"),
         ("LiveJournal", "https://{}.livejournal.com"),
         ("Dreamwidth", "https://{}.dreamwidth.org"),
-        ("Blogger Profile", "https://www.blogger.com/profile/{}"),
         ("Soundgasm", "https://soundgasm.net/u/{}"),
-        ("Replit Teams", "https://replit.com/@{}"),
         ("Read.cv", "https://read.cv/{}"),
         ("Cara", "https://cara.app/{}"),
         ("Mastodon Art", "https://mastodon.art/@{}"),
@@ -1029,30 +1058,19 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("Kbin Social", "https://kbin.social/u/{}"),
         ("Write.as", "https://write.as/{}"),
         ("BuySellAds", "https://www.buysellads.com/{}"),
-        ("DailyMotion Legacy", "https://www.dailymotion.com/{}"),
         ("GitHub Gist", "https://gist.github.com/{}"),
         ("ReadTheDocs", "https://readthedocs.org/profiles/{}"),
-        ("Amino Profile", "https://aminoapps.com/u/{}"),
-        ("Mastodon Cloud", "https://mstdn.jp/@{}"),
-        ("Flickr NSID Guess", "https://www.flickr.com/photos/{}"),
-        ("Canva Profile Guess", "https://www.canva.com/{}"),
         ("AudioJungle", "https://audiojungle.net/user/{}"),
         ("VideoHive", "https://videohive.net/user/{}"),
         ("GraphicRiver", "https://graphicriver.net/user/{}"),
-        ("CodeCanyon Author", "https://codecanyon.net/user/{}"),
-        ("Envato Market", "https://themeforest.net/user/{}"),
         ("Crowdin", "https://crowdin.com/profile/{}"),
         ("Transifex", "https://www.transifex.com/user/profile/{}"),
-        ("Kofi Page", "https://ko-fi.com/{}"),
-        ("Maven Repository", "https://mvnrepository.com/artifact/{}"),
         ("Anaconda", "https://anaconda.org/{}"),
-        ("npmjs Org Guess", "https://www.npmjs.com/~{}"),
         ("DevRant", "https://devrant.com/users/{}"),
         ("Gitee", "https://gitee.com/{}"),
         ("SourceForge", "https://sourceforge.net/u/{}/profile"),
         ("OpenCollective", "https://opencollective.com/{}"),
         ("Liberapay", "https://liberapay.com/{}"),
-        ("Blogger Custom", "https://{}.blogspot.com"),
         ("Bookmeter", "https://bookmeter.com/users/{}"),
         ("Pixelfed FR", "https://pixelfed.fr/{}"),
         ("Pixelfed UNO", "https://pixelfed.uno/{}"),
@@ -1062,46 +1080,32 @@ def build_platforms() -> Dict[str, PlatformRule]:
         ("RateYourMusic", "https://rateyourmusic.com/~{}"),
         ("Discogs", "https://www.discogs.com/user/{}"),
         ("Setlist.fm", "https://www.setlist.fm/user/{}"),
-        ("Replit Bounties", "https://replit.com/@{}"),
         ("MobyGames", "https://www.mobygames.com/user/{}"),
         ("Backloggd", "https://www.backloggd.com/u/{}/"),
         ("HowLongToBeat", "https://howlongtobeat.com/user/{}"),
-        ("Amino Games", "https://aminoapps.com/u/{}"),
         ("OpenLibrary", "https://openlibrary.org/people/{}"),
         ("Blipfoto", "https://www.blipfoto.com/{}"),
-        ("Ello Art", "https://ello.co/{}"),
         ("Ulule", "https://ulule.com/{}"),
-        ("Kickstarter Creator Guess", "https://www.kickstarter.com/profile/{}"),
-        ("Product Hunt Makers", "https://www.producthunt.com/@{}"),
-        ("Pearltrees User", "https://www.pearltrees.com/{}"),
         ("Shapr3D Community", "https://discourse.shapr3d.com/u/{}"),
         ("Discourse Meta", "https://meta.discourse.org/u/{}"),
         ("Kitsu", "https://kitsu.io/users/{}"),
-        ("VNDB", "https://vndb.org/u{}"),
         ("Mastodon Tech", "https://techhub.social/@{}"),
         ("SpaceHey", "https://spacehey.com/{}"),
         ("ModDB", "https://www.moddb.com/members/{}"),
-        ("Nexus Mods", "https://next.nexusmods.com/profile/{}"),
-        ("AO3 Profile", "https://archiveofourown.org/users/{}"),
         ("Comic Fury", "https://{}.comicfury.com"),
         ("Neocities", "https://{}.neocities.org"),
-        ("GitLab Snippets", "https://gitlab.com/{}"),
         ("Mastodon World", "https://mastodon.world/@{}"),
         ("Squabbles", "https://squabbles.io/u/{}"),
         ("Mastodon XYZ", "https://mastodon.xyz/@{}"),
         ("CounterSocial", "https://counter.social/@{}"),
         ("Pillowfort", "https://www.pillowfort.social/{}"),
-        ("WikiTree", "https://www.wikitree.com/wiki/{}"),
         ("Bookwyrm Social", "https://bookwyrm.social/user/{}"),
         ("Mastodon Books", "https://bookstodon.com/@{}"),
-        ("Aether", "https://getaether.net/{}"),
         ("Lemmy ML", "https://lemmy.ml/u/{}"),
-        ("Mastodon Linux", "https://fosstodon.org/@{}"),
         ("Micro.blog", "https://micro.blog/{}"),
         ("Post.news", "https://post.news/{}"),
         ("Mastodon Design", "https://mastodon.design/@{}"),
         ("Mastodon Games", "https://mastodon.gamedev.place/@{}"),
-        ("Mastodon Social Alt", "https://mastodon.social/@{}"),
     ]
 
     for name, url in bulk_rules:
@@ -1111,12 +1115,26 @@ def build_platforms() -> Dict[str, PlatformRule]:
             not_found_strings=["page not found", "not found", "404"],
             auth_strings=["sign in", "login", "log in", "just a moment", "attention required"],
             positive_strings=["followers", "following", "posts", "projects", "activity", "about", "joined", "profile", "member since"],
+            reliability="medium",
         ))
 
     return rules
 
 
+def validate_platforms(platforms: Dict[str, PlatformRule]) -> None:
+    seen_urls: Dict[str, str] = {}
+    deduped: Dict[str, PlatformRule] = {}
+    for name, rule in platforms.items():
+        if rule.url in seen_urls:
+            continue
+        seen_urls[rule.url] = name
+        deduped[name] = rule
+    platforms.clear()
+    platforms.update(deduped)
+
+
 PLATFORMS: Dict[str, PlatformRule] = build_platforms()
+validate_platforms(PLATFORMS)
 
 
 def looks_like_generic_redirect(final_url: str, username: str) -> bool:
@@ -1146,6 +1164,31 @@ def site_specific_positive_from_json_ld(username: str, html_text: str) -> bool:
     return False
 
 
+def has_strong_positive_evidence(
+    username: str,
+    final_url: str,
+    title: str,
+    reasons: List[str],
+) -> bool:
+    username_l = username.lower()
+    signals = 0
+
+    if username_l in final_url.lower():
+        signals += 1
+    if username_l in title:
+        signals += 1
+    if "jsonld_person_with_username" in reasons:
+        signals += 2
+    if any(r.startswith("site_positive_body:") for r in reasons):
+        signals += 1
+    if any(r.startswith("site_positive_title:") for r in reasons):
+        signals += 1
+    if "stayed_on_username_url" in reasons:
+        signals += 1
+
+    return signals >= 2
+
+
 def score_response(username: str, rule: PlatformRule, response: requests.Response) -> Tuple[str, str, str, int, int]:
     raw_html = response.text[:MAX_BODY_BYTES]
     body = normalize_text(raw_html)
@@ -1167,14 +1210,22 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         return "unconfirmed", "auth_required_status", "medium", 0, 35
 
     if response.status_code == 403 and rule.treat_403_as_unconfirmed:
-        negative += 25
-        reasons.append("restricted_403")
+        return "unconfirmed", "restricted_403", "medium", 0, 35
 
     if response.status_code == 429 and rule.treat_429_as_unconfirmed:
         return "unconfirmed", "rate_limited_429", "medium", 0, 35
 
     if 500 <= response.status_code <= 599:
         return "unconfirmed", "server_error", "low", 0, 30
+
+    if title_is_explicit_not_found(title_raw, username):
+        return "not_found", "explicit_not_found_title", "high", 0, 100
+
+    if body_is_explicit_not_found(body):
+        return "not_found", "explicit_not_found_body", "high", 0, 95
+
+    if is_challenge_page(title_raw, raw_html):
+        return "unconfirmed", "challenge_page", "medium", 0, 40
 
     global_title_hit = contains_any(title, GLOBAL_NEGATIVE_TITLE)
     global_body_hit = contains_any(body, GLOBAL_NEGATIVE_BODY)
@@ -1185,37 +1236,20 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
     site_title_negative = contains_any(title, rule.title_not_found_strings)
     site_auth_negative = contains_any(early_body, rule.auth_strings)
 
-    negative_regexes = compile_patterns(rule.negative_regex)
+    negative_regexes = compile_patterns([
+        p.replace("{u}", re.escape(username_l)) for p in rule.negative_regex
+    ])
     neg_regex_hit = regex_hit(body, negative_regexes)
 
-    # ------------------------------------------------------------
-    # HARD STOPS: site-specific negatives must win immediately
-    # ------------------------------------------------------------
-    # Example: "bertsec: user not found" on crates.io
     if site_title_negative:
         return "not_found", f"site_not_found_title:{site_title_negative}", "high", 0, 100
 
-    # If the title includes both the username and a not-found marker, this is also a hard stop
-    if username_l in title and (
-        "user not found" in title
-        or "profile not found" in title
-        or "account not found" in title
-        or "page not found" in title
-        or "this account doesn't exist" in title
-        or "this account does not exist" in title
-    ):
-        return "not_found", "title_username_plus_not_found", "high", 0, 100
-
-    # Strong site body negatives should also beat generic positives
     if site_body_negative and username_l in body:
         return "not_found", f"site_not_found_body:{site_body_negative}", "high", 0, 95
 
     if neg_regex_hit:
         return "not_found", f"negative_regex:{neg_regex_hit}", "high", 0, 95
 
-    # ------------------------------------------------------------
-    # Continue with weighted scoring only if no hard stop matched
-    # ------------------------------------------------------------
     if global_title_hit:
         negative += 35
         reasons.append(f"title_negative:{global_title_hit}")
@@ -1252,8 +1286,6 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
             negative += 35
             reasons.append("username_missing_from_final_url")
 
-    # IMPORTANT:
-    # Do NOT award username_in_title if title is negative in any way
     if username_l in title and not global_title_hit and not site_title_negative:
         positive += 24
         reasons.append("username_in_title")
@@ -1288,7 +1320,16 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         positive += 28
         reasons.append("jsonld_person_with_username")
 
-    if any(x in body for x in ["followers", "following", "posts", "projects", "repositories", "member since", "joined", "about"]):
+    if (
+        not global_body_hit
+        and not global_title_hit
+        and not site_body_negative
+        and not site_title_negative
+        and any(x in body for x in [
+            "followers", "following", "posts", "projects",
+            "repositories", "member since", "joined", "about"
+        ])
+    ):
         positive += 10
         reasons.append("generic_profile_signal")
 
@@ -1314,7 +1355,11 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         confidence = "high" if negative >= 90 else "medium"
         return "not_found", "; ".join(reasons), confidence, positive, negative
 
-    if positive >= 45 and delta >= 12:
+    if (
+        positive >= 45
+        and delta >= 12
+        and has_strong_positive_evidence(username, final_url, title, reasons)
+    ):
         confidence = "high" if positive >= 70 else "medium"
         return "found", "; ".join(reasons), confidence, positive, negative
 
@@ -1322,16 +1367,35 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         confidence = "high" if negative >= 85 else "medium"
         return "not_found", "; ".join(reasons), confidence, positive, negative
 
-    if positive >= 35 and negative < 35:
+    if positive >= 35 and negative < 35 and has_strong_positive_evidence(username, final_url, title, reasons):
         return "found", "; ".join(reasons), "medium", positive, negative
 
     return "unconfirmed", "; ".join(reasons) if reasons else "weak_or_conflicting_signals", "low", positive, negative
+
 
 def check_platform(rule: PlatformRule, username: str, timeout: float = DEFAULT_TIMEOUT) -> ScanResult:
     url = rule.url.format(username)
     session = get_session()
     try:
         response = session.get(url, timeout=timeout, allow_redirects=True)
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+            return ScanResult(
+                platform=rule.name,
+                url=url,
+                final_url=response.url,
+                state="unconfirmed",
+                status_code=response.status_code,
+                confidence="low",
+                note=f"unexpected_content_type:{content_type}",
+                title=None,
+                matched_rule="content_type_guard",
+                response_length=len(response.text) if response.text else 0,
+                positive_score=0,
+                negative_score=0,
+            )
+
         title = extract_title(response.text[:MAX_BODY_BYTES]) or None
         state, note, confidence, pos, neg = score_response(username, rule, response)
         return ScanResult(
@@ -1343,7 +1407,7 @@ def check_platform(rule: PlatformRule, username: str, timeout: float = DEFAULT_T
             confidence=confidence,
             note=note,
             title=title,
-            matched_rule="site_aware_soft404_engine_v2",
+            matched_rule="site_aware_soft404_engine_v3",
             response_length=len(response.text) if response.text else 0,
             positive_score=pos,
             negative_score=neg,
@@ -1370,18 +1434,28 @@ def scan_username(
     timeout: float = DEFAULT_TIMEOUT,
     workers: int = MAX_WORKERS,
     platforms: Optional[Dict[str, PlatformRule]] = None,
+    min_reliability: str = "high",
 ) -> List[ScanResult]:
     if not username or not username.strip():
         raise ValueError("username cannot be empty")
 
+    reliability_order = {"high": 3, "medium": 2, "low": 1}
+    min_score = reliability_order.get(min_reliability, 3)
+
     username = username.strip()
     platform_map = platforms or PLATFORMS
+    filtered_platforms = {
+        name: rule
+        for name, rule in platform_map.items()
+        if reliability_order.get(rule.reliability, 1) >= min_score
+    }
+
     results: List[ScanResult] = []
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, 100))) as executor:
         futures = {
             executor.submit(check_platform, rule, username, timeout): name
-            for name, rule in platform_map.items()
+            for name, rule in filtered_platforms.items()
         }
         for future in as_completed(futures):
             results.append(future.result())
@@ -1415,10 +1489,16 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
     if note.startswith("request_error:"):
         return "The site could not be checked cleanly because the request failed, timed out, or was blocked."
 
+    if note.startswith("unexpected_content_type:"):
+        return "The site returned a non-HTML response, so the result could not be evaluated confidently."
+
     if "hard_404_status" in note:
         return "The site returned a hard 404 or 410 response, so the account was classified as not found."
 
-    if "site_not_found_body" in note or "site_not_found_title" in note:
+    if "explicit_not_found_title" in note or "explicit_not_found_body" in note:
+        return "The page explicitly stated the user or profile was not found."
+
+    if "site_not_found_body" in note or "site_not_found_title" in note or "negative_regex" in note:
         return "The page contained site-specific not-found language, which is strong evidence the account does not exist."
 
     if "redirected_to_generic_page" in note or "username_missing_from_final_url" in note:
@@ -1430,7 +1510,7 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
     if "generic_shell_title" in note or "tiny_body_without_username" in note:
         return "The response looked like a generic shell page or weak wrapper page rather than a real user profile."
 
-    if "auth_wall" in note or "site_auth" in note or "restricted_403" in note or "rate_limited_429" in note:
+    if "auth_wall" in note or "site_auth" in note or "restricted_403" in note or "rate_limited_429" in note or "challenge_page" in note:
         return "The site presented a login wall, anti-bot control, or request restriction, so the result was left unconfirmed."
 
     if state == "found":
@@ -1447,9 +1527,13 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
 
 
 if __name__ == "__main__":
-    # Example usage:
     username = "bertsec"
-    results = scan_username(username, timeout=8.0, workers=32)
+
+    # "high" = only stronger routes
+    # "medium" = broader coverage
+    # "low" = everything
+    results = scan_username(username, timeout=8.0, workers=32, min_reliability="medium")
+
     print(json.dumps({
         "summary": results_summary(results),
         "results": results_to_dicts(results),
