@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import re
-import requests
+# We use curl_cffi instead of requests for browser impersonation
+from curl_cffi import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
-# --- CONFIGURATION & TARGETS ---
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "DNT": "1",
-}
+# --- CONFIGURATION ---
 
 # Integrated all platforms with optimized Reddit/ArtStation targets
 PLATFORMS: Dict[str, str] = {
@@ -221,16 +215,11 @@ PLATFORMS: Dict[str, str] = {
     "Myspace": "https://myspace.com/{}",
 }
 
-NEGATIVE_BODY_STRONG = [
-    "page not found", "not found", "404", "missing page", "error", 
-    "nobody on reddit goes by that name", "user not found", 
-    "could not find the page", "doesn't exist", "doesn’t exist",
-    "profile not found", "account not found", "this account is private"
-]
-
-AUTH_WALL_MARKERS = [
-    "sign in", "login", "log in", "sign up", "join now", "recaptcha", 
-    "verify you are human", "attention required", "checking your browser"
+# These markers identify when a page is a "Soft 404"
+NEGATIVE_MARKERS = [
+    "page not found", "404", "user not found", "doesn't exist",
+    "nobody on reddit goes by that name", "profile not found",
+    "this account is private", "not found"
 ]
 
 @dataclass
@@ -242,12 +231,11 @@ class ScanResult:
     status_code: Optional[int]
     confidence: str
     note: Optional[str] = None
-    title: Optional[str] = None
     positive_score: int = 0
     negative_score: int = 0
     friendly_reason: str = ""
 
-# --- HELPERS FOR STREAMLIT ---
+# --- HELPERS ---
 
 def results_summary(results: List[ScanResult]) -> Dict[str, int]:
     return {
@@ -258,76 +246,63 @@ def results_summary(results: List[ScanResult]) -> Dict[str, int]:
     }
 
 def humanize_reason(note: str, state: str, pos: int, neg: int) -> str:
-    if state == "found":
-        return f"Confirmed profile signals (Score: {pos})"
-    if state == "not_found":
-        return f"Platform confirmed user does not exist (Score: {neg})"
-    if "403" in note or "Access" in note:
-        return "Access restricted by site (anti-bot or login wall)"
-    return note if note else "Insufficient evidence"
-
-def extract_title(html: str) -> str:
-    match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-    return re.sub(r"\s+", " ", match.group(1)).strip() if match else ""
+    if state == "found": return f"Match found (Score: {pos})"
+    if state == "not_found": return "User does not exist on this platform."
+    return note if note else "Insufficient data"
 
 # --- ENGINE ---
 
-def score_response(username: str, response: requests.Response) -> tuple[str, str, str, int, int]:
-    raw_html = response.text[:300000]
-    body = raw_html.lower()
-    title = extract_title(raw_html).lower()
-    final_url = response.url.lower()
+def score_response(platform: str, username: str, html: str, status_code: int, final_url: str) -> tuple[str, str, str, int, int]:
+    body = html.lower()
     uname_l = username.lower()
     
-    # 1. SPECIAL REDDIT JSON
-    if "reddit.com" in final_url and ".json" in final_url:
-        if response.status_code == 404 or '"error": 404' in raw_html:
-            return "not_found", "Reddit confirmed missing", "high", 0, 100
-        if '"kind": "t2"' in raw_html:
-            return "found", "Reddit account verified", "high", 100, 0
-
-    # 2. HARD NEGATIVE
-    if response.status_code in (404, 410):
+    # 1. Hard Failures
+    if status_code in (404, 410):
         return "not_found", "HTTP 404", "high", 0, 100
 
-    # 3. SOFT NEGATIVE (ArtStation Fix)
-    for marker in NEGATIVE_BODY_STRONG:
-        if marker in body or marker in title:
-            return "not_found", f"Marker found: {marker}", "high", 0, 100
+    # 2. Soft Failures (Site specific text checks)
+    for marker in NEGATIVE_MARKERS:
+        if marker in body:
+            return "not_found", f"Marker: {marker}", "high", 0, 100
 
-    # 4. AUTH WALL
-    if response.status_code in (401, 403, 429):
-        return "unconfirmed", f"Blocked (HTTP {response.status_code})", "low", 0, 50
-    for marker in AUTH_WALL_MARKERS:
-        if marker in title:
-            return "unconfirmed", "Login wall detected", "low", 0, 50
-
-    # 5. POSITIVE
+    # 3. Positive Signals
     pos = 0
-    if uname_l in title: pos += 55
-    if uname_l in final_url: pos += 25
-    signals = ["followers", "following", "repositories", "joined", "bio", "posts"]
-    pos += sum(10 for s in signals if s in body)
+    # YouTube specific check for the handle in the source
+    if platform == "YouTube" and f"@{uname_l}" in body: pos += 80
+    
+    # General title/url checks
+    if uname_l in body: pos += 40
+    if uname_l in final_url: pos += 30
+    
+    if pos >= 60:
+        return "found", "Signals detected", "high", pos, 0
+        
+    return "unconfirmed", "Ambiguous results", "low", pos, 0
 
-    if pos >= 65:
-        return "found", "Strong match", "high", pos, 0
-    return "unconfirmed", "Limited evidence", "low", pos, 0
-
-def check_platform(platform: str, username: str, timeout: float = 8.0) -> ScanResult:
+def check_platform(platform: str, username: str, timeout: float = 10.0) -> ScanResult:
     url = PLATFORMS[platform].format(username)
     try:
-        res = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
-        state, note, conf, pos, neg = score_response(username, res)
+        # The MAGIC happens here: impersonate="chrome110" bypasses fingerprints
+        response = requests.get(
+            url, 
+            impersonate="chrome110", 
+            timeout=timeout, 
+            follow_redirects=True
+        )
+        
+        state, note, conf, pos, neg = score_response(
+            platform, username, response.text, response.status_code, response.url
+        )
+        
         return ScanResult(
-            platform=platform, url=url.replace(".json",""), final_url=res.url,
-            state=state, status_code=res.status_code, confidence=conf, 
-            note=note, title=extract_title(res.text[:5000]),
-            positive_score=pos, negative_score=neg
+            platform=platform, url=url, final_url=response.url,
+            state=state, status_code=response.status_code, confidence=conf, 
+            note=note, positive_score=pos, negative_score=neg
         )
     except Exception as e:
-        return ScanResult(platform, url, url, "unconfirmed", None, "low", str(e))
+        return ScanResult(platform, url, url, "unconfirmed", None, "low", f"Error: {str(e)}")
 
-def scan_username(username: str, timeout: float = 8.0, workers: int = 30) -> List[ScanResult]:
+def scan_username(username: str, timeout: float = 10.0, workers: int = 20) -> List[ScanResult]:
     results = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(check_platform, p, username, timeout): p for p in PLATFORMS}
