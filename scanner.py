@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-# We use curl_cffi instead of requests for browser impersonation
+# We use curl_cffi for browser impersonation to bypass Reddit/YouTube blocks
 from curl_cffi import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -9,7 +9,6 @@ from typing import Dict, List, Optional
 
 # --- CONFIGURATION ---
 
-# Integrated all platforms with optimized Reddit/ArtStation targets
 PLATFORMS: Dict[str, str] = {
     "GitHub": "https://github.com/{}",
     "GitLab": "https://gitlab.com/{}",
@@ -215,11 +214,10 @@ PLATFORMS: Dict[str, str] = {
     "Myspace": "https://myspace.com/{}",
 }
 
-# These markers identify when a page is a "Soft 404"
 NEGATIVE_MARKERS = [
     "page not found", "404", "user not found", "doesn't exist",
     "nobody on reddit goes by that name", "profile not found",
-    "this account is private", "not found"
+    "this account is private", "not found", "steam community :: error"
 ]
 
 @dataclass
@@ -246,9 +244,9 @@ def results_summary(results: List[ScanResult]) -> Dict[str, int]:
     }
 
 def humanize_reason(note: str, state: str, pos: int, neg: int) -> str:
-    if state == "found": return f"Match found (Score: {pos})"
-    if state == "not_found": return "User does not exist on this platform."
-    return note if note else "Insufficient data"
+    if state == "found": return f"Match confirmed (Score: {pos})"
+    if state == "not_found": return "Account does not exist."
+    return note if note else "Ambiguous signals"
 
 # --- ENGINE ---
 
@@ -256,38 +254,42 @@ def score_response(platform: str, username: str, html: str, status_code: int, fi
     body = html.lower()
     uname_l = username.lower()
     
-    # 1. Hard Failures
+    # 1. Status Check
     if status_code in (404, 410):
         return "not_found", "HTTP 404", "high", 0, 100
 
-    # 2. Soft Failures (Site specific text checks)
+    # 2. Specific Soft 404 Checks (Priority)
     for marker in NEGATIVE_MARKERS:
         if marker in body:
-            return "not_found", f"Marker: {marker}", "high", 0, 100
+            return "not_found", f"Marker detected: {marker}", "high", 0, 100
 
     # 3. Positive Signals
     pos = 0
-    # YouTube specific check for the handle in the source
-    if platform == "YouTube" and f"@{uname_l}" in body: pos += 80
+    # YouTube fix: Check for handle in source
+    if platform == "YouTube" and f"@{uname_l}" in body: 
+        pos += 90
     
-    # General title/url checks
-    if uname_l in body: pos += 40
-    if uname_l in final_url: pos += 30
+    # Reddit fix: Check for 'created' or 'karma' to confirm active profile
+    if platform == "Reddit" and any(x in body for x in ["karma", "cake day", "posts"]):
+        pos += 50
+
+    if uname_l in body: pos += 30
+    if uname_l in final_url: pos += 20
     
-    if pos >= 60:
-        return "found", "Signals detected", "high", pos, 0
+    if pos >= 55:
+        return "found", "Active profile indicators", "high", pos, 0
         
-    return "unconfirmed", "Ambiguous results", "low", pos, 0
+    return "unconfirmed", "Could not verify presence", "low", pos, 0
 
 def check_platform(platform: str, username: str, timeout: float = 10.0) -> ScanResult:
     url = PLATFORMS[platform].format(username)
     try:
-        # The MAGIC happens here: impersonate="chrome110" bypasses fingerprints
+        # FIXED: Changed follow_redirects to allow_redirects
         response = requests.get(
             url, 
             impersonate="chrome110", 
             timeout=timeout, 
-            follow_redirects=True
+            allow_redirects=True
         )
         
         state, note, conf, pos, neg = score_response(
@@ -300,6 +302,7 @@ def check_platform(platform: str, username: str, timeout: float = 10.0) -> ScanR
             note=note, positive_score=pos, negative_score=neg
         )
     except Exception as e:
+        # Capture the error message for debugging in the Streamlit UI
         return ScanResult(platform, url, url, "unconfirmed", None, "low", f"Error: {str(e)}")
 
 def scan_username(username: str, timeout: float = 10.0, workers: int = 20) -> List[ScanResult]:
