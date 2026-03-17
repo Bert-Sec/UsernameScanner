@@ -425,7 +425,7 @@ def build_platforms() -> Dict[str, PlatformRule]:
         "https://crates.io/users/{}",
         not_found_strings=["user not found", "not found"],
         title_not_found_strings=["user not found", "not found"],
-        positive_strings=["crates", "following"],
+        positive_strings=["crates", "following", "crates.io"],
         title_positive_strings=["crates.io"],
         negative_regex=[r"\b{u}\b\s*:\s*user not found", r"\buser not found\b"],
         must_keep_username_in_final_url=True,
@@ -1239,7 +1239,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
     negative_regexes = compile_patterns([
         p.replace("{u}", re.escape(username_l)) for p in rule.negative_regex
     ])
-    neg_regex_hit = regex_hit(body, negative_regexes)
+    neg_regex_hit = regex_hit(body, negative_regexes) or regex_hit(title, negative_regexes)
 
     if site_title_negative:
         return "not_found", f"site_not_found_title:{site_title_negative}", "high", 0, 100
@@ -1251,11 +1251,11 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         return "not_found", f"negative_regex:{neg_regex_hit}", "high", 0, 95
 
     if global_title_hit:
-        negative += 35
+        negative += 40
         reasons.append(f"title_negative:{global_title_hit}")
 
     if global_body_hit:
-        negative += 45
+        negative += 50
         reasons.append(f"body_negative:{global_body_hit}")
 
     if global_auth_hit:
@@ -1263,7 +1263,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         reasons.append(f"auth_wall:{global_auth_hit}")
 
     if url_negative_hit:
-        negative += 50
+        negative += 60
         reasons.append(f"url_negative:{url_negative_hit}")
 
     if site_auth_negative:
@@ -1275,7 +1275,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         reasons.append("redirected")
 
     if looks_like_generic_redirect(final_url, username) and not rule.allow_homepage_redirect:
-        negative += 35
+        negative += 45
         reasons.append("redirected_to_generic_page")
 
     if rule.must_keep_username_in_final_url:
@@ -1283,7 +1283,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
             positive += 25
             reasons.append("username_in_final_url")
         else:
-            negative += 35
+            negative += 40
             reasons.append("username_missing_from_final_url")
 
     if username_l in title and not global_title_hit and not site_title_negative:
@@ -1351,13 +1351,13 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
 
     delta = positive - negative
 
-    if negative >= 70 and delta <= -15:
+    if negative >= 65 and delta <= -20:
         confidence = "high" if negative >= 90 else "medium"
         return "not_found", "; ".join(reasons), confidence, positive, negative
 
     if (
         positive >= 45
-        and delta >= 12
+        and delta >= 15
         and has_strong_positive_evidence(username, final_url, title, reasons)
     ):
         confidence = "high" if positive >= 70 else "medium"
@@ -1497,6 +1497,9 @@ def humanize_reason(note: Optional[str], state: str, positive_score: int, negati
 
     if "explicit_not_found_title" in note or "explicit_not_found_body" in note:
         return "The page explicitly stated the user or profile was not found."
+
+    if "nobody on reddit goes by that name" in note:
+        return "The page indicated that no Reddit user has that name, a strong signal the account does not exist."
 
     if "site_not_found_body" in note or "site_not_found_title" in note or "negative_regex" in note:
         return "The page contained site-specific not-found language, which is strong evidence the account does not exist."
