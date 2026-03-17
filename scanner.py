@@ -194,6 +194,7 @@ GLOBAL_NEGATIVE_TITLE = [
 
 GLOBAL_NEGATIVE_BODY = [
     "this page is no longer available",
+    "this page is not available",
     "we can't find that page",
     "we couldnt find that page",
     "we couldn't find that page",
@@ -424,6 +425,7 @@ def build_platforms() -> Dict[str, PlatformRule]:
         "Crates.io",
         "https://crates.io/users/{}",
         not_found_strings=["user not found"],
+        title_not_found_strings=["user not found"],
         positive_strings=["crates", "following", "crates.io"],
         title_positive_strings=["crates.io"],
         negative_regex=[r"\b{u}\b\s*:\s*user not found"],
@@ -1274,7 +1276,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         reasons.append("redirected")
 
     if looks_like_generic_redirect(final_url, username) and not rule.allow_homepage_redirect:
-        negative += 45
+        negative += 50
         reasons.append("redirected_to_generic_page")
 
     if rule.must_keep_username_in_final_url:
@@ -1333,7 +1335,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         reasons.append("generic_profile_signal")
 
     if title in GENERIC_SHELL_TITLES and username_l not in body and username_l not in final_url:
-        negative += 45
+        negative += 55
         reasons.append("generic_shell_title")
 
     if response.status_code == 200 and len(raw_html) < 8000 and username_l not in body and username_l not in title:
@@ -1350,13 +1352,13 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
 
     delta = positive - negative
 
-    if negative >= 65 and delta <= -20:
+    if negative >= 60 and delta <= -25:
         confidence = "high" if negative >= 90 else "medium"
         return "not_found", "; ".join(reasons), confidence, positive, negative
 
     if (
         positive >= 45
-        and delta >= 15
+        and delta >= 20
         and has_strong_positive_evidence(username, final_url, title, reasons)
     ):
         confidence = "high" if positive >= 70 else "medium"
