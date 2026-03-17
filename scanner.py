@@ -210,6 +210,7 @@ GLOBAL_NEGATIVE_BODY = [
     "the page you requested could not be found",
     "the page you are looking for doesn't exist",
     "the page you are looking for does not exist",
+    "the resource you requested could not be found",
     "nobody on reddit goes by that name",
     "sorry, this page isn't available",
     "sorry, this page isnt available",
@@ -263,6 +264,9 @@ GENERIC_SHELL_TITLES = {
     "spotify - web player",
     "spotify – web player",
     "trello",
+    "profile",
+    "user",
+    "user profile",
     "programming problems and competitions :: hackerrank",
 }
 
@@ -1335,11 +1339,11 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         reasons.append("generic_profile_signal")
 
     if title in GENERIC_SHELL_TITLES and username_l not in body and username_l not in title:
-        negative += 55
+        negative += 60
         reasons.append("generic_shell_title")
 
     if response.status_code == 200 and len(raw_html) < 8000 and username_l not in body and username_l not in title:
-        negative += 20
+        negative += 30
         reasons.append("tiny_body_without_username")
 
     if response.status_code == 200 and len(raw_html) > 50000 and username_l in body and negative < 50:
