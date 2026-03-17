@@ -86,7 +86,7 @@ def body_is_explicit_not_found(body: str) -> bool:
         "the specified profile could not be found",
         "nobody on reddit goes by that name",
         "this page does not exist",
-        "the page you requested could not be found",
+        "the page you requested could not be found"
     ]
     return any(p in body for p in hard_patterns)
 
@@ -423,11 +423,10 @@ def build_platforms() -> Dict[str, PlatformRule]:
     add(make_rule(
         "Crates.io",
         "https://crates.io/users/{}",
-        not_found_strings=["user not found", "not found"],
-        title_not_found_strings=["user not found", "not found"],
+        not_found_strings=["user not found"],
         positive_strings=["crates", "following", "crates.io"],
         title_positive_strings=["crates.io"],
-        negative_regex=[r"\b{u}\b\s*:\s*user not found", r"\buser not found\b"],
+        negative_regex=[r"\b{u}\b\s*:\s*user not found"],
         must_keep_username_in_final_url=True,
     ))
     add(make_rule(
