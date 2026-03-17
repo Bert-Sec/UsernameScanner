@@ -1252,11 +1252,11 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         return "not_found", f"negative_regex:{neg_regex_hit}", "high", 0, 95
 
     if global_title_hit:
-        negative += 40
+        negative += 60
         reasons.append(f"title_negative:{global_title_hit}")
 
     if global_body_hit:
-        negative += 50
+        negative += 70
         reasons.append(f"body_negative:{global_body_hit}")
 
     if global_auth_hit:
@@ -1334,7 +1334,7 @@ def score_response(username: str, rule: PlatformRule, response: requests.Respons
         positive += 10
         reasons.append("generic_profile_signal")
 
-    if title in GENERIC_SHELL_TITLES and username_l not in body and username_l not in final_url:
+    if title in GENERIC_SHELL_TITLES and username_l not in body and username_l not in title:
         negative += 55
         reasons.append("generic_shell_title")
 
